@@ -17,7 +17,14 @@ from backend.app.services.retriever import PolicyRetriever
 class PolicyChatbot:
     """Policy chatbot with Gemini generation and safe fallback answers."""
 
-    def __init__(self, retriever: PolicyRetriever | None = None) -> None:
+    POLICY_UNAVAILABLE_MESSAGE = (
+        "Information not available in IT policies."
+    )
+
+    def __init__(
+        self,
+        retriever: PolicyRetriever | None = None,
+    ) -> None:
         self.settings = get_settings()
         self.retriever = retriever or PolicyRetriever()
         self.gemini_client = self._build_gemini_client()
@@ -34,6 +41,7 @@ class PolicyChatbot:
             )
 
         greeting_answer = self._handle_greeting(message)
+
         if greeting_answer:
             return ChatResponse(
                 answer=greeting_answer,
@@ -45,38 +53,22 @@ class PolicyChatbot:
         sources = self.retriever.search(message)
 
         if not sources:
-            general_answer, general_notice = self._try_general_gemini_answer(
-                message
-            )
-
-            if general_answer:
-                return ChatResponse(
-                    answer=general_answer,
-                    sources=[],
-                    fallback=False,
-                    provider="gemini-general",
-                    notice=general_notice,
-                )
-
-            return ChatResponse(
-                answer="Information not available in IT policies.",
-                sources=[],
-                fallback=True,
-                provider="policy-rules",
-                notice=general_notice,
-            )
+            return self._build_general_response(message)
 
         gemini_answer, gemini_notice = self._try_gemini_answer(
-            message,
-            sources,
+            message=message,
+            sources=sources,
         )
 
         if gemini_answer:
+            if self._is_policy_unavailable_answer(gemini_answer):
+                return self._build_general_response(message)
+
             return ChatResponse(
                 answer=gemini_answer,
                 sources=sources,
                 fallback=False,
-                provider="gemini",
+                provider="gemini-policy",
                 notice=gemini_notice,
             )
 
@@ -100,6 +92,31 @@ class PolicyChatbot:
             "gemini_configured": bool(self.gemini_client),
         }
 
+    def _build_general_response(
+        self,
+        message: str,
+    ) -> ChatResponse:
+        general_answer, general_notice = (
+            self._try_general_gemini_answer(message)
+        )
+
+        if general_answer:
+            return ChatResponse(
+                answer=general_answer,
+                sources=[],
+                fallback=False,
+                provider="gemini-general",
+                notice=general_notice,
+            )
+
+        return ChatResponse(
+            answer=self.POLICY_UNAVAILABLE_MESSAGE,
+            sources=[],
+            fallback=True,
+            provider="policy-rules",
+            notice=general_notice,
+        )
+
     def _build_gemini_client(self):
         if (
             not genai
@@ -113,17 +130,24 @@ class PolicyChatbot:
                 api_key=self.settings.gemini_api_key,
                 http_options=genai_types.HttpOptions(
                     client_args={
-                        "trust_env": self.settings.gemini_use_env_proxy
+                        "trust_env": (
+                            self.settings.gemini_use_env_proxy
+                        )
                     }
                 ),
             )
 
         except Exception as error:
-            print("\n================ GEMINI CLIENT ERROR ================")
+            print(
+                "\n"
+                "================ GEMINI CLIENT ERROR ================\n"
+            )
             print(type(error).__name__)
             print(str(error))
             traceback.print_exc()
-            print("=====================================================\n")
+            print(
+                "=====================================================\n"
+            )
             return None
 
     def _try_gemini_answer(
@@ -132,9 +156,15 @@ class PolicyChatbot:
         sources: list[SourceReference],
     ) -> tuple[str | None, str | None]:
         if not self.gemini_client:
-            return None, "Gemini is not configured."
+            return (
+                None,
+                "Gemini is not configured.",
+            )
 
-        prompt = self._build_prompt(message, sources)
+        prompt = self._build_policy_prompt(
+            message=message,
+            sources=sources,
+        )
 
         try:
             response = self.gemini_client.models.generate_content(
@@ -142,36 +172,16 @@ class PolicyChatbot:
                 contents=prompt,
                 config=genai_types.GenerateContentConfig(
                     temperature=0.2,
-                    max_output_tokens=500,
+                    max_output_tokens=700,
                 ),
             )
 
             answer = (response.text or "").strip()
 
         except Exception as error:
-            error_text = str(error)
-
-            if "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
-                print("\n================ GEMINI QUOTA ERROR =================")
-                print(error_text)
-                print("=====================================================\n")
-
-                return (
-                    None,
-                    "Gemini free quota is temporarily exhausted. "
-                    "Please wait a few seconds and try again.",
-                )
-
-            print("\n================ GEMINI POLICY ERROR ================")
-            print(type(error).__name__)
-            print(error_text)
-            traceback.print_exc()
-            print("=====================================================\n")
-
-            return (
-                None,
-                "Gemini is currently unavailable, so a policy-only "
-                "fallback answer was used.",
+            return self._handle_gemini_error(
+                error=error,
+                context="POLICY",
             )
 
         if not answer:
@@ -183,7 +193,7 @@ class PolicyChatbot:
 
         return answer, None
 
-    def _build_prompt(
+    def _build_policy_prompt(
         self,
         message: str,
         sources: list[SourceReference],
@@ -191,7 +201,10 @@ class PolicyChatbot:
         context_blocks: list[str] = []
 
         for source in sources:
-            location = source.section or "Section not provided"
+            location = (
+                source.section
+                or "Section not provided"
+            )
 
             page = (
                 f"Page {source.page_number}"
@@ -199,7 +212,10 @@ class PolicyChatbot:
                 else "Page not provided"
             )
 
-            snippet = source.snippet or "No supporting excerpt provided."
+            snippet = (
+                source.snippet
+                or "No supporting excerpt provided."
+            )
 
             context_blocks.append(
                 f"Document: {source.document_name}\n"
@@ -212,58 +228,87 @@ class PolicyChatbot:
 
         return (
             "You are Pakistan Cables IT Policy Assistant.\n"
-            "Answer in clear, simple and professional English.\n"
-            "Use only the policy context provided below.\n"
-            "Do not invent company rules, approvals, limits or requirements.\n"
-            "If the policy context does not answer the question, reply exactly:\n"
-            "Information not available in IT policies.\n\n"
-            "Response format:\n"
-            "1. Give the direct answer first.\n"
-            "2. Explain the rule in simple language.\n"
-            "3. Give one practical example when it helps understanding.\n"
-            "4. Keep the answer concise.\n"
-            "5. Do not repeat the source details because the application "
-            "shows sources separately.\n\n"
+            "Answer only from the policy context provided below.\n"
+            "Do not invent Pakistan Cables rules, approvals, limits, "
+            "responsibilities, timelines or procedures.\n"
+            "If the context does not answer the question, reply exactly:\n"
+            f"{self.POLICY_UNAVAILABLE_MESSAGE}\n\n"
+
+            "Writing style:\n"
+            "- Use clear, simple and professional English.\n"
+            "- Start with a short heading.\n"
+            "- Give one direct introductory sentence.\n"
+            "- Use bullet points beginning with the symbol •.\n"
+            "- Put every bullet point on a separate line.\n"
+            "- Use short paragraphs.\n"
+            "- Add a practical example only when it is supported by the "
+            "policy context or clearly labelled as an illustration.\n"
+            "- Do not number every sentence.\n"
+            "- Do not write one long paragraph.\n"
+            "- Do not use a Markdown table.\n"
+            "- Keep the answer concise and easy to scan.\n"
+            "- Do not repeat document names, page numbers or source details "
+            "because the application shows sources separately.\n\n"
+
+            "Important accuracy rules:\n"
+            "- Mention only requirements present in the supplied context.\n"
+            "- Do not combine the policy with general industry practices.\n"
+            "- Do not add a clause, control or requirement that is not in "
+            "the context.\n"
+            "- If multiple context snippets disagree, state that the policy "
+            "information is unclear rather than guessing.\n\n"
+
             "Password-specific instructions:\n"
-            "- If the question is about passwords, provide a safe example "
-            "only when useful.\n"
+            "- If the question is about passwords, provide an example only "
+            "when useful.\n"
             "- Clearly say that the example is for illustration only.\n"
             "- Tell the user not to copy or reuse the exact example.\n"
-            "- Do not claim that the example is an approved Pakistan Cables "
+            "- Do not claim the example is an approved Pakistan Cables "
             "password.\n"
-            "- Only mention password length or complexity requirements if "
-            "they exist in the provided policy context.\n\n"
+            "- Mention password length or complexity only if it appears in "
+            "the policy context.\n\n"
+
             f"User question:\n{message}\n\n"
             f"Policy context:\n{context}"
         )
 
-    def _build_policy_answer(self, message: str) -> str:
+    def _build_policy_answer(
+        self,
+        message: str,
+    ) -> str:
         normalized = message.lower()
 
-        if "vpn" in normalized or "remote access" in normalized:
+        if (
+            "vpn" in normalized
+            or "remote access" in normalized
+        ):
             return (
-                "To request VPN or remote access, create an IT Service Desk "
-                "ticket and follow the required approval process.\n\n"
-                "Example: If you need to work from home, submit a ticket "
-                "explaining why remote access is required and wait for the "
-                "relevant approval before connecting."
+                "Remote Access Request\n\n"
+                "Relevant policy information was found, but Gemini could not "
+                "generate the full response.\n\n"
+                "• Review the source shown below.\n"
+                "• Follow only the approval and access steps stated in the "
+                "policy.\n"
+                "• Contact the IT Service Desk if clarification is required."
             )
 
         if "password" in normalized:
             return (
-                "If your password expires, use the approved password reset "
-                "process or contact the IT Service Desk for assistance.\n\n"
-                "Example only: a strong password format could combine an "
-                "unrelated phrase, numbers and symbols, such as "
-                "`BlueCable!47River`.\n\n"
-                "Do not copy this exact example. Create your own unique "
-                "password according to the company password policy."
+                "Password Assistance\n\n"
+                "Relevant password policy information was found, but Gemini "
+                "could not generate the full response.\n\n"
+                "• Review the policy source shown below.\n"
+                "• Use the approved password reset process.\n"
+                "• Contact the IT Service Desk if the reset does not work."
             )
 
         return (
+            "Policy Information\n\n"
             "Relevant policy context was found, but Gemini could not generate "
-            "the detailed response. Please review the source shown below or "
-            "contact the IT Service Desk."
+            "the detailed response.\n\n"
+            "• Review the source shown below.\n"
+            "• Follow only the requirements stated in the policy.\n"
+            "• Contact the IT Service Desk if clarification is required."
         )
 
     def _try_general_gemini_answer(
@@ -277,18 +322,7 @@ class PolicyChatbot:
                 "for general AI fallback.",
             )
 
-        prompt = (
-            "You are Pakistan Cables PCL GPT.\n"
-            "The company policy knowledge base did not contain an answer.\n"
-            "Provide a helpful, clear and professional general answer.\n"
-            "Do not claim that the answer comes from Pakistan Cables policy.\n"
-            "Do not invent internal Pakistan Cables procedures.\n"
-            "If the message is a greeting, reply naturally and briefly.\n"
-            "For security-sensitive questions, give safe general guidance.\n"
-            "Give a practical example when it improves understanding.\n"
-            "Keep the answer concise but complete.\n\n"
-            f"User message:\n{message}"
-        )
+        prompt = self._build_general_prompt(message)
 
         try:
             response = self.gemini_client.models.generate_content(
@@ -296,36 +330,16 @@ class PolicyChatbot:
                 contents=prompt,
                 config=genai_types.GenerateContentConfig(
                     temperature=0.3,
-                    max_output_tokens=500,
+                    max_output_tokens=700,
                 ),
             )
 
             answer = (response.text or "").strip()
 
         except Exception as error:
-            error_text = str(error)
-
-            if "429" in error_text or "RESOURCE_EXHAUSTED" in error_text:
-                print("\n================ GEMINI QUOTA ERROR =================")
-                print(error_text)
-                print("=====================================================\n")
-
-                return (
-                    None,
-                    "Gemini free quota is temporarily exhausted. "
-                    "Please wait a few seconds and try again.",
-                )
-
-            print("\n================ GEMINI GENERAL ERROR ================")
-            print(type(error).__name__)
-            print(error_text)
-            traceback.print_exc()
-            print("======================================================\n")
-
-            return (
-                None,
-                "No matching policy was found. Gemini general fallback is "
-                "currently unavailable.",
+            return self._handle_gemini_error(
+                error=error,
+                context="GENERAL",
             )
 
         if not answer:
@@ -340,7 +354,166 @@ class PolicyChatbot:
             "This answer is AI-generated and not based on company policy.",
         )
 
-    def _handle_greeting(self, message: str) -> str | None:
+    def _build_general_prompt(
+        self,
+        message: str,
+    ) -> str:
+        return (
+            "You are Pakistan Cables PCL GPT.\n"
+            "The company policy knowledge base did not contain a reliable "
+            "answer to the user's question.\n"
+            "Provide an accurate and helpful general-information answer.\n"
+            "Do not claim that the answer comes from Pakistan Cables policy.\n"
+            "Do not invent internal Pakistan Cables procedures, approvals, "
+            "systems, contacts or responsibilities.\n"
+            "If the question asks about a Microsoft product such as "
+            "SharePoint, Teams, Power Automate or Power BI, explain the "
+            "product generally and clearly.\n"
+            "For security-sensitive questions, provide safe general guidance.\n\n"
+
+            "Writing style:\n"
+            "- Start with a short heading.\n"
+            "- Give a simple definition first.\n"
+            "- Use bullet points beginning with the symbol • when listing "
+            "features or steps.\n"
+            "- Put every bullet point on a separate line.\n"
+            "- Use short paragraphs.\n"
+            "- Do not number every sentence.\n"
+            "- Do not write one long paragraph.\n"
+            "- Do not use a Markdown table.\n"
+            "- Keep the answer concise but complete.\n"
+            "- Do not end with an unnecessary invitation for more questions.\n\n"
+
+            f"User message:\n{message}"
+        )
+
+    def _handle_gemini_error(
+        self,
+        error: Exception,
+        context: str,
+    ) -> tuple[str | None, str | None]:
+        error_text = str(error)
+
+        if (
+            "429" in error_text
+            or "RESOURCE_EXHAUSTED" in error_text
+        ):
+            print(
+                "\n"
+                "================ GEMINI QUOTA ERROR =================\n"
+            )
+            print(error_text)
+            print(
+                "=====================================================\n"
+            )
+
+            return (
+                None,
+                "Gemini free quota is temporarily exhausted. "
+                "Please wait and try again later.",
+            )
+
+        if (
+            "404" in error_text
+            or "NOT_FOUND" in error_text
+        ):
+            print(
+                "\n"
+                f"================ GEMINI {context} MODEL ERROR "
+                "================\n"
+            )
+            print(error_text)
+            traceback.print_exc()
+            print(
+                "=====================================================\n"
+            )
+
+            return (
+                None,
+                "The configured Gemini model is unavailable. "
+                "Please update GEMINI_MODEL in the .env file.",
+            )
+
+        if (
+            "401" in error_text
+            or "403" in error_text
+            or "UNAUTHENTICATED" in error_text
+            or "PERMISSION_DENIED" in error_text
+        ):
+            print(
+                "\n"
+                f"================ GEMINI {context} AUTH ERROR "
+                "================\n"
+            )
+            print(error_text)
+            traceback.print_exc()
+            print(
+                "=====================================================\n"
+            )
+
+            return (
+                None,
+                "Gemini authentication failed. Please verify the API key.",
+            )
+
+        print(
+            "\n"
+            f"================ GEMINI {context} ERROR "
+            "================\n"
+        )
+        print(type(error).__name__)
+        print(error_text)
+        traceback.print_exc()
+        print(
+            "=====================================================\n"
+        )
+
+        if context == "POLICY":
+            notice = (
+                "Gemini is currently unavailable, so a policy-only fallback "
+                "answer was used."
+            )
+        else:
+            notice = (
+                "No matching policy was found. Gemini general fallback is "
+                "currently unavailable."
+            )
+
+        return None, notice
+
+    @staticmethod
+    def _is_policy_unavailable_answer(
+        answer: str,
+    ) -> bool:
+        normalized = (
+            answer.lower()
+            .strip()
+            .replace("*", "")
+            .replace("#", "")
+        )
+
+        unavailable_phrases = (
+            "information not available in it policies",
+            "information is not available in it policies",
+            "not available in the provided policy",
+            "not available in the policy context",
+            "policy context does not contain",
+            "the provided policy does not contain",
+            "not found in the policy",
+            "not found in the provided policy",
+            "the policy does not provide",
+            "the context does not provide",
+        )
+
+        return any(
+            phrase in normalized
+            for phrase in unavailable_phrases
+        )
+
+    @staticmethod
+    def _handle_greeting(
+        message: str,
+    ) -> str | None:
         normalized = message.lower().strip()
 
         greetings = {
@@ -351,12 +524,17 @@ class PolicyChatbot:
             "assalam o alaikum",
             "assalamualaikum",
             "aoa",
+            "good morning",
+            "good afternoon",
+            "good evening",
         }
 
         if normalized in greetings:
             return (
-                "Assalam o Alaikum! I am the Pakistan Cables IT Policy "
-                "Assistant. How can I help you today?"
+                "Assalam o Alaikum!\n\n"
+                "I am the Pakistan Cables IT Policy Assistant.\n\n"
+                "• Ask me about available Pakistan Cables policies.\n"
+                "• You can also ask general IT questions."
             )
 
         return None
