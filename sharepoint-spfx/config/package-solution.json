@@ -1,0 +1,45 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/package-solution.schema.json",
+  "solution": {
+    "name": "pcl-gpt-client-side-solution",
+    "id": "6f1df3f5-6adb-4273-b8df-e2972f4f3cbc",
+    "version": "1.0.0.0",
+    "includeClientSideAssets": false,
+    "skipFeatureDeployment": true,
+    "isDomainIsolated": false,
+    "developer": {
+      "name": "Pakistan Cables",
+      "websiteUrl": "https://pakistancable.sharepoint.com",
+      "privacyUrl": "https://pakistancable.sharepoint.com",
+      "termsOfUseUrl": "https://pakistancable.sharepoint.com",
+      "mpnId": "Undefined-1.20.0"
+    },
+    "metadata": {
+      "shortDescription": {
+        "default": "PCL GPT widget injector for One Desk."
+      },
+      "longDescription": {
+        "default": "Injects the floating PCL GPT widget onto SharePoint One Desk pages."
+      },
+      "screenshotPaths": [],
+      "videoUrl": "",
+      "categories": []
+    },
+    "features": [
+      {
+        "title": "PCL GPT One Desk Application Customizer",
+        "description": "Loads the PCL GPT floating chat widget.",
+        "id": "fd3539a0-1b3e-4d26-8d31-0d18e6835264",
+        "version": "1.0.0.0",
+        "assets": {
+          "elementManifests": [
+            "elements.xml"
+          ]
+        }
+      }
+    ]
+  },
+  "paths": {
+    "zippedPackage": "solution/pcl-gpt.sppkg"
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/serve.schema.json",
+  "port": 4321,
+  "https": true,
+  "initialPage": "https://pakistancable.sharepoint.com/SitePages/onedesk.aspx",
+  "serveConfigurations": {
+    "default": {
+      "pageUrl": "https://pakistancable.sharepoint.com/SitePages/onedesk.aspx",
+      "customActions": {
+        "6c32fa18-a5fd-4e3c-bf16-bce8f08d5f10": {
+          "location": "ClientSideExtension.ApplicationCustomizer",
+          "properties": {
+            "loaderScriptUrl": "https://your-chat-host.example.com/sharepoint-loader.js",
+            "embedUrl": "https://your-chat-host.example.com/embed.html?apiBase=https%3A%2F%2Fyour-chat-host.example.com%2Fapi",
+            "widgetWidth": 460,
+            "widgetHeight": 720,
+            "openByDefault": true
+          }
+        }
+      }
+    }
+  }
+}

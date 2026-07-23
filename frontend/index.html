@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pakistan Cables PCL GPT</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <section class="mock-page">
+        <div class="mock-copy">
+          <p class="eyebrow">One Desk Portal</p>
+          <h1>Internal IT Knowledge Hub</h1>
+          <p class="lede">
+            Access procedures, policy guidance, and employee support resources
+            from one place. The assistant below is designed to sit on top of the
+            SharePoint experience as a floating helper.
+          </p>
+          <div class="mock-grid">
+            <article class="mock-card">
+              <h2>Remote Access</h2>
+              <p>
+                Learn how VPN, approvals, and remote access controls are handled
+                across the organization.
+              </p>
+            </article>
+            <article class="mock-card">
+              <h2>Password Rules</h2>
+              <p>
+                Review the current reset process, expiry handling, and security
+                expectations for user credentials.
+              </p>
+            </article>
+            <article class="mock-card">
+              <h2>IT Service Desk</h2>
+              <p>
+                Find guidance on ticket creation, incident triage, and internal
+                request workflows.
+              </p>
+            </article>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <div class="widget-layer">
+      <button
+        id="launcherButton"
+        class="launcher hidden"
+        type="button"
+        aria-controls="chatWidget"
+        aria-expanded="true"
+      >
+        <span class="launcher-pill">PCL GPT</span>
+        <span class="launcher-mark" aria-hidden="true">
+          <img src="./assets/pcl-logo.png" alt="" />
+        </span>
+      </button>
+
+      <section id="chatWidget" class="chat-widget" aria-live="polite">
+        <header class="widget-header">
+          <div class="widget-brand">
+            <span class="brand-mark" aria-hidden="true">
+              <img src="./assets/pcl-logo.png" alt="" />
+            </span>
+            <div>
+              <h2>PCL GPT</h2>
+              <p id="statusNote" class="widget-subtitle">
+                Checking connectivity and response mode.
+              </p>
+            </div>
+          </div>
+
+          <div class="widget-actions">
+            <button id="endChatButton" class="header-button" type="button">
+              End Chat
+            </button>
+            <button
+              id="collapseButton"
+              class="icon-button"
+              type="button"
+              aria-label="Collapse chat"
+            >
+              <svg viewBox="0 0 24 24" role="presentation">
+                <path
+                  d="M6 9.5 12 15.5 18 9.5"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  stroke-width="2.2"
+                />
+              </svg>
+            </button>
+          </div>
+        </header>
+
+        <div id="messages" class="messages"></div>
+
+        <form id="chatForm" class="composer">
+          <label class="sr-only" for="messageInput">Type your message here</label>
+          <div class="composer-field">
+            <textarea
+              id="messageInput"
+              placeholder="Type your message here... Enter to send, Ctrl+Enter for new line"
+              rows="2"
+            ></textarea>
+            <button id="sendButton" class="send-button" type="submit" aria-label="Send message">
+              <svg viewBox="0 0 24 24" role="presentation">
+                <path
+                  d="M3.8 20.2 21 12 3.8 3.8l3.4 6.6L13 12l-5.8 1.6Z"
+                  fill="currentColor"
+                />
+              </svg>
+            </button>
+          </div>
+        </form>
+
+        <footer class="widget-footer">
+          By using this AI assistant, you acknowledge and agree that responses
+          are based on available policy content. <a href="#">read more</a>
+        </footer>
+      </section>
+
+      <div id="feedbackBackdrop" class="feedback-backdrop hidden"></div>
+      <section
+        id="feedbackModal"
+        class="feedback-modal hidden"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="feedbackTitle"
+      >
+        <button
+          id="closeFeedbackButton"
+          class="close-modal"
+          type="button"
+          aria-label="Close feedback dialog"
+        >
+          &times;
+        </button>
+
+        <h3 id="feedbackTitle">Enjoying <span>PCL GPT</span>?</h3>
+        <p class="feedback-subtitle">How would you rate our service?</p>
+
+        <div class="feedback-options">
+          <button class="feedback-choice" type="button" data-rating="positive">
+            <span class="feedback-icon">&#128077;</span>
+            <span>You did great!</span>
+          </button>
+          <button class="feedback-choice" type="button" data-rating="negative">
+            <span class="feedback-icon">&#128078;</span>
+            <span>I'm not satisfied.</span>
+          </button>
+        </div>
+
+        <p class="feedback-label">Do you have any additional feedback?</p>
+        <textarea
+          id="feedbackInput"
+          class="feedback-input"
+          placeholder="Share your feedback..."
+          rows="4"
+        ></textarea>
+
+        <button id="submitFeedbackButton" class="submit-feedback" type="button">
+          <span>&#9992;</span>
+          <span>Submit</span>
+        </button>
+        <button id="skipFeedbackButton" class="skip-feedback" type="button">
+          No Thanks
+        </button>
+      </section>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

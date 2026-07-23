@@ -1,0 +1,35 @@
+{
+  "name": "pcl-gpt-spfx",
+  "version": "0.0.1",
+  "private": true,
+  "engines": {
+    "node": ">=18.17.1 <19.0.0"
+  },
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "gulp bundle",
+    "clean": "gulp clean",
+    "package": "gulp package-solution",
+    "serve": "gulp serve"
+  },
+  "dependencies": {
+    "@microsoft/decorators": "1.20.0",
+    "@microsoft/sp-application-base": "1.20.0",
+    "@microsoft/sp-core-library": "1.20.0",
+    "@microsoft/sp-loader": "1.20.0"
+  },
+  "devDependencies": {
+    "@microsoft/eslint-config-spfx": "1.20.0",
+    "@microsoft/eslint-plugin-spfx": "1.20.0",
+    "@microsoft/rush-stack-compiler-5.3": "0.1.0",
+    "@microsoft/sp-build-web": "1.20.0",
+    "@microsoft/sp-module-interfaces": "1.20.0",
+    "@rushstack/eslint-config": "4.0.1",
+    "@types/eslint": "8.56.12",
+    "@types/node": "22.10.2",
+    "ajv": "^8.17.1",
+    "eslint": "8.57.1",
+    "gulp": "4.0.2",
+    "typescript": "5.3.3"
+  }
+}

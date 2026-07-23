@@ -1,0 +1,10 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx/client-side-extension-manifest.schema.json",
+  "id": "6c32fa18-a5fd-4e3c-bf16-bce8f08d5f10",
+  "alias": "PclGptApplicationCustomizer",
+  "componentType": "Extension",
+  "extensionType": "ApplicationCustomizer",
+  "version": "1.0.0.0",
+  "manifestVersion": 2,
+  "requiresCustomScript": false
+}

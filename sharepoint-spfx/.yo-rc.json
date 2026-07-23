@@ -1,0 +1,15 @@
+{
+  "@microsoft/generator-sharepoint": {
+    "version": "1.20.0",
+    "libraryName": "pcl-gpt-spfx",
+    "environment": "spo",
+    "packageManager": "npm",
+    "solutionName": "pcl-gpt-spfx",
+    "solutionShortDescription": "Pakistan Cables One Desk floating chat widget.",
+    "skipFeatureDeployment": true,
+    "isDomainIsolated": false,
+    "componentType": "extension",
+    "extensionType": "ApplicationCustomizer",
+    "plusBeta": false
+  }
+}

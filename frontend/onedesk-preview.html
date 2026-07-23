@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pakistan Cables One Desk Preview</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --brand: #0b8a3e;
+        --surface: #ffffff;
+        --ink: #14324a;
+        --muted: #5a6d7c;
+        --line: #d7e1e8;
+        --bg: #f5f8fb;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: Aptos, "Segoe UI", sans-serif;
+        color: var(--ink);
+        background: var(--bg);
+      }
+
+      .shell {
+        min-height: 100vh;
+        display: grid;
+        grid-template-columns: 64px 1fr;
+      }
+
+      .rail {
+        background: #f3f6f8;
+        border-right: 1px solid var(--line);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 28px;
+        padding: 18px 0;
+      }
+
+      .rail-mark,
+      .rail-dot {
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        border: 2px solid #6a7f8e;
+      }
+
+      .rail-mark {
+        border-radius: 6px;
+      }
+
+      .content {
+        padding: 24px 28px 72px;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+      }
+
+      .logo {
+        width: 92px;
+        height: 92px;
+        object-fit: contain;
+      }
+
+      .title {
+        font-size: 1.08rem;
+        font-weight: 600;
+      }
+
+      .hero {
+        margin: 26px auto 0;
+        max-width: 1500px;
+        height: 286px;
+        border-radius: 0;
+        overflow: hidden;
+        background:
+          linear-gradient(135deg, rgba(255, 255, 255, 0.08), transparent 35%),
+          linear-gradient(90deg, #0b9445 0%, #0aa04a 100%);
+        position: relative;
+      }
+
+      .hero::before,
+      .hero::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background-image:
+          linear-gradient(90deg, rgba(255, 255, 255, 0.14) 1px, transparent 1px),
+          linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+        background-size: 120px 120px, 120px 120px;
+        mask-image: linear-gradient(90deg, rgba(0, 0, 0, 0.9), transparent 85%);
+      }
+
+      .hero-copy {
+        position: absolute;
+        left: 40px;
+        right: 40px;
+        bottom: 28px;
+        display: flex;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 24px;
+        color: #ffffff;
+      }
+
+      .hero-copy h1,
+      .hero-copy p {
+        margin: 0;
+      }
+
+      .hero-copy h1 {
+        font-size: clamp(2rem, 3vw, 3rem);
+        text-shadow: 0 2px 16px rgba(0, 0, 0, 0.24);
+      }
+
+      .hero-mark {
+        text-align: center;
+        line-height: 0.88;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        font-size: clamp(3rem, 6vw, 5.5rem);
+      }
+
+      .hero-mark span {
+        display: block;
+      }
+
+      .grid {
+        max-width: 1500px;
+        margin: 52px auto 0;
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 54px;
+      }
+
+      .column h2 {
+        margin: 0 0 34px;
+        font-size: clamp(1.9rem, 2vw, 2.8rem);
+        font-weight: 500;
+      }
+
+      .item {
+        display: flex;
+        align-items: center;
+        gap: 18px;
+        margin-bottom: 30px;
+      }
+
+      .item-icon {
+        width: 56px;
+        height: 56px;
+        border-radius: 14px;
+        background: linear-gradient(180deg, #fff8d6, #ffe89b);
+        box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.08);
+        flex: 0 0 auto;
+      }
+
+      .item:nth-child(3) .item-icon {
+        background: linear-gradient(180deg, #def6ff, #9be0ff);
+      }
+
+      .item:nth-child(4) .item-icon {
+        background: linear-gradient(180deg, #ffe2e2, #ffafaf);
+      }
+
+      .item span {
+        font-size: 1.1rem;
+      }
+
+      .note {
+        max-width: 1500px;
+        margin: 28px auto 0;
+        color: var(--muted);
+        font-size: 0.96rem;
+      }
+
+      @media (max-width: 1100px) {
+        .grid {
+          grid-template-columns: 1fr;
+          gap: 20px;
+        }
+
+        .hero {
+          height: 320px;
+        }
+
+        .hero-copy {
+          flex-direction: column;
+          align-items: flex-start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <aside class="rail" aria-hidden="true">
+        <div class="rail-mark"></div>
+        <div class="rail-dot"></div>
+        <div class="rail-mark"></div>
+        <div class="rail-mark"></div>
+        <div class="rail-dot"></div>
+      </aside>
+
+      <main class="content">
+        <div class="topbar">
+          <img class="logo" src="./assets/pcl-logo.png" alt="Pakistan Cables" />
+          <div class="title">Pakistan Cables Ltd</div>
+        </div>
+
+        <section class="hero">
+          <div class="hero-copy">
+            <div>
+              <h1>Pakistan Cables One Desk</h1>
+              <p>Your single point of access for all internal tools and services.</p>
+            </div>
+            <div class="hero-mark" aria-hidden="true">
+              <span>ONE</span>
+              <span>DESK</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="grid">
+          <div class="column">
+            <h2>IT Service Desk</h2>
+            <div class="item"><div class="item-icon"></div><span>Create a Ticket</span></div>
+            <div class="item"><div class="item-icon"></div><span>View your tickets</span></div>
+            <div class="item"><div class="item-icon"></div><span>FAQs</span></div>
+          </div>
+
+          <div class="column">
+            <h2>Employee Self Service</h2>
+            <div class="item"><div class="item-icon"></div><span>HSE Portal</span></div>
+            <div class="item"><div class="item-icon"></div><span>Oracle E-Business Suite</span></div>
+            <div class="item"><div class="item-icon"></div><span>Harmony ESS</span></div>
+            <div class="item"><div class="item-icon"></div><span>Performance Management</span></div>
+          </div>
+
+          <div class="column">
+            <h2>Voice Box</h2>
+            <div class="item"><div class="item-icon"></div><span>Raise your voice</span></div>
+            <div class="item"><div class="item-icon"></div><span>Track Your Voices</span></div>
+          </div>
+        </section>
+
+        <p class="note">
+          Local SharePoint-style preview. The floating chat is injected through the same
+          loader approach that will be used on One Desk after hosting on HTTPS.
+        </p>
+      </main>
+    </div>
+
+    <script
+      src="./sharepoint-loader.js"
+      data-embed-url="http://127.0.0.1:5500/embed.html?apiBase=http%3A%2F%2F127.0.0.1%3A8001%2Fapi"
+      data-width="460"
+      data-height="720"
+      data-open="true"
+    ></script>
+  </body>
+</html>

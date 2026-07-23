@@ -1,0 +1,82 @@
+{
+  "D:\\PROJECT\\Chart Bot\\policies\\Access Control & Identity Management Policy.pdf": {
+    "file_hash": "4789677a20323e7fbf4526d105a18688042ccbb40fcbe4225e69184873c3b6f8",
+    "document_name": "Access Control & Identity Management Policy.pdf",
+    "chunk_count": 3
+  },
+  "D:\\PROJECT\\Chart Bot\\policies\\AI Governance Policy & Framework.pdf": {
+    "file_hash": "ff7cf11730407aec96067f7a0da29b8b0bc07bdbf49bf6d40f718dd891a26dfb",
+    "document_name": "AI Governance Policy & Framework.pdf",
+    "chunk_count": 13
+  },
+  "D:\\PROJECT\\Chart Bot\\policies\\Appendix A Critical Systems.pdf": {
+    "file_hash": "6fabf31f7b68b8b3b11e69ac892e7bf5d382d670653cfdf2e8d70b7938ff7e1e",
+    "document_name": "Appendix A Critical Systems.pdf",
+    "chunk_count": 1
+  },
+  "D:\\PROJECT\\Chart Bot\\policies\\Approved Software List.pdf": {
+    "file_hash": "3a18e704d54f79ef9845ffd39429e3742e1ade056fcf28e2db56b6608785b526",
+    "document_name": "Approved Software List.pdf",
+    "chunk_count": 4
+  },
+  "D:\\PROJECT\\Chart Bot\\policies\\Backup & Disaster Recovery Policy.pdf": {
+    "file_hash": "b37cea8a4b3c21b3ca09771d2217ef2d30538daeb462ae6518a4ff6a5f1006f8",
+    "document_name": "Backup & Disaster Recovery Policy.pdf",
+    "chunk_count": 1
+  },
+  "D:\\PROJECT\\Chart Bot\\policies\\Hardware & Software Procurement.pdf": {
+    "file_hash": "cb594f50f8b533b1d8848f484e9afae6747e6e622e65814b6276d869f83844fa",
+    "document_name": "Hardware & Software Procurement.pdf",
+    "chunk_count": 2
+  },
+  "D:\\PROJECT\\Chart Bot\\policies\\Incident Response Policy.pdf": {
+    "file_hash": "2091a5ac5b25e3d2dd3ac14ff82d405a2403ff7aee08f245ac063fe762885487",
+    "document_name": "Incident Response Policy.pdf",
+    "chunk_count": 3
+  },
+  "D:\\PROJECT\\Chart Bot\\policies\\Information Security Policy.pdf": {
+    "file_hash": "1c5ed01be3fcd0df351f2802ce22c22196f99679d2729fc3618cbe28d7be913c",
+    "document_name": "Information Security Policy.pdf",
+    "chunk_count": 3
+  },
+  "D:\\PROJECT\\Chart Bot\\policies\\IT & Cybersecurity Governance Manual.pdf": {
+    "file_hash": "0a72fe244c712ff106b0e4a1d0439a4e731eb52e581c63e193fa922bd1611dd8",
+    "document_name": "IT & Cybersecurity Governance Manual.pdf",
+    "chunk_count": 9
+  },
+  "D:\\PROJECT\\Chart Bot\\policies\\IT Acceptable Use Policy.pdf": {
+    "file_hash": "b0c49475dc0a9806a23a00682a41eadd7dd9666f586be41ef709b92a1c7f56a9",
+    "document_name": "IT Acceptable Use Policy.pdf",
+    "chunk_count": 16
+  },
+  "D:\\PROJECT\\Chart Bot\\policies\\IT Asset & Endpoint Management Policy.pdf": {
+    "file_hash": "a0a5d600779e97d27cd77ca52f10a9cd09132e766ed3da89ad8e699dc7f1c8cf",
+    "document_name": "IT Asset & Endpoint Management Policy.pdf",
+    "chunk_count": 15
+  },
+  "D:\\PROJECT\\Chart Bot\\policies\\IT Hardware Procurement Policy.pdf": {
+    "file_hash": "554c2aeda554832776b52469f09cc7a0bc5c0a2bb021b6760a5ac071c6620a60",
+    "document_name": "IT Hardware Procurement Policy.pdf",
+    "chunk_count": 6
+  },
+  "D:\\PROJECT\\Chart Bot\\policies\\IT Software Procurement Policy.pdf": {
+    "file_hash": "2750a35a277aa729e3735e6a1585bb3a113c010873dc9a09614d928d3993207e",
+    "document_name": "IT Software Procurement Policy.pdf",
+    "chunk_count": 5
+  },
+  "D:\\PROJECT\\Chart Bot\\policies\\QC_Inspection_Request_User & Qc_Manual_v1.0.0.pdf": {
+    "file_hash": "0b1bffacd7d4a1fa1ff247e4eeec4f2e3eb62a2408093345645a75c9a6679755",
+    "document_name": "QC_Inspection_Request_User & Qc_Manual_v1.0.0.pdf",
+    "chunk_count": 20
+  },
+  "D:\\PROJECT\\Chart Bot\\policies\\README.md": {
+    "file_hash": "07f71b28b04bb4477419c8ad5c081654b23034e49546154e59772e7e94ad6256",
+    "document_name": "README.md",
+    "chunk_count": 1
+  },
+  "D:\\PROJECT\\Chart Bot\\policies\\Vendor & Third Party Risk Policy.pdf": {
+    "file_hash": "6e1325c9ba9317cfc9805598bbd171c1077bd501c94a735b5d5a63d5aac3b452",
+    "document_name": "Vendor & Third Party Risk Policy.pdf",
+    "chunk_count": 3
+  }
+}

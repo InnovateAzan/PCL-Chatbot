@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Elements xmlns="http://schemas.microsoft.com/sharepoint/">
+  <ClientSideComponentInstance
+    Title="PCL GPT One Desk"
+    Location="ClientSideExtension.ApplicationCustomizer"
+    ComponentId="6c32fa18-a5fd-4e3c-bf16-bce8f08d5f10"
+    Properties="{&quot;loaderScriptUrl&quot;:&quot;https://your-chat-host.example.com/sharepoint-loader.js&quot;,&quot;embedUrl&quot;:&quot;https://your-chat-host.example.com/embed.html?apiBase=https%3A%2F%2Fyour-chat-host.example.com%2Fapi&quot;,&quot;widgetWidth&quot;:460,&quot;widgetHeight&quot;:720,&quot;openByDefault&quot;:true}" />
+</Elements>

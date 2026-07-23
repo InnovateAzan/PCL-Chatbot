@@ -1,0 +1,18 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/config.2.0.schema.json",
+  "version": "2.0",
+  "bundles": {
+    "pcl-gpt-application-customizer": {
+      "components": [
+        {
+          "entrypoint": "./lib/extensions/pclGpt/PclGptApplicationCustomizer.js",
+          "manifest": "./src/extensions/pclGpt/PclGptApplicationCustomizer.manifest.json"
+        }
+      ]
+    }
+  },
+  "externals": {},
+  "localizedResources": {
+    "PclGptApplicationCustomizerStrings": "lib/extensions/pclGpt/loc/{locale}.js"
+  }
+}
