@@ -1,4 +1,5 @@
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8085/api";
+
 const runtimeConfig = getRuntimeConfig();
 const API_BASE_URL = runtimeConfig.apiBaseUrl;
 const EMBED_MODE = runtimeConfig.embedMode;
@@ -12,11 +13,18 @@ const chatWidget = document.getElementById("chatWidget");
 const collapseButton = document.getElementById("collapseButton");
 const endChatButton = document.getElementById("endChatButton");
 const statusNote = document.getElementById("statusNote");
+
 const feedbackModal = document.getElementById("feedbackModal");
 const feedbackBackdrop = document.getElementById("feedbackBackdrop");
-const closeFeedbackButton = document.getElementById("closeFeedbackButton");
-const skipFeedbackButton = document.getElementById("skipFeedbackButton");
-const submitFeedbackButton = document.getElementById("submitFeedbackButton");
+const closeFeedbackButton = document.getElementById(
+  "closeFeedbackButton"
+);
+const skipFeedbackButton = document.getElementById(
+  "skipFeedbackButton"
+);
+const submitFeedbackButton = document.getElementById(
+  "submitFeedbackButton"
+);
 const feedbackInput = document.getElementById("feedbackInput");
 const feedbackChoices = document.querySelectorAll(".feedback-choice");
 
@@ -24,60 +32,66 @@ let selectedRating = "";
 
 document.body.classList.toggle("embed-mode", EMBED_MODE);
 
-appendMessage(
-  "bot",
-  "Assalam o Alaikum! Welcome to Pakistan Cables. How can I help you today?"
-);
 setWidgetOpen(true);
 checkHealth();
 
-launcherButton.addEventListener("click", () => {
-  const willOpen = chatWidget.classList.contains("hidden");
+launcherButton?.addEventListener("click", () => {
+  const willOpen = chatWidget?.classList.contains("hidden") ?? true;
   setWidgetOpen(willOpen);
 });
 
-collapseButton.addEventListener("click", () => {
+collapseButton?.addEventListener("click", () => {
   setWidgetOpen(false);
 });
 
-endChatButton.addEventListener("click", () => {
+endChatButton?.addEventListener("click", () => {
   openFeedback();
 });
 
-closeFeedbackButton.addEventListener("click", closeFeedback);
-skipFeedbackButton.addEventListener("click", closeFeedback);
-feedbackBackdrop.addEventListener("click", closeFeedback);
+closeFeedbackButton?.addEventListener("click", closeFeedback);
+skipFeedbackButton?.addEventListener("click", closeFeedback);
+feedbackBackdrop?.addEventListener("click", closeFeedback);
 
 feedbackChoices.forEach((button) => {
   button.addEventListener("click", () => {
     selectedRating = button.dataset.rating ?? "";
-    feedbackChoices.forEach((item) => item.classList.remove("selected"));
+
+    feedbackChoices.forEach((item) => {
+      item.classList.remove("selected");
+    });
+
     button.classList.add("selected");
   });
 });
 
-submitFeedbackButton.addEventListener("click", () => {
+submitFeedbackButton?.addEventListener("click", () => {
   const summary = selectedRating
     ? `Thanks for the ${selectedRating} feedback.`
     : "Thanks for your feedback.";
 
-  const detail = feedbackInput.value.trim();
+  const detail = feedbackInput?.value.trim() ?? "";
+
   appendMessage(
     "bot",
-    detail ? `${summary} Your comment has been noted.` : summary
+    detail
+      ? `${summary} Your comment has been noted.`
+      : summary
   );
+
   closeFeedback();
 });
 
-chatForm.addEventListener("submit", async (event) => {
+chatForm?.addEventListener("submit", async (event) => {
   event.preventDefault();
 
-  const message = messageInput.value.trim();
+  const message = messageInput?.value.trim() ?? "";
+
   if (!message) {
     return;
   }
 
   appendMessage("user", message);
+
   messageInput.value = "";
   autoResizeTextarea();
   setComposerState(true);
@@ -85,143 +99,98 @@ chatForm.addEventListener("submit", async (event) => {
   try {
     const response = await fetch(`${API_BASE_URL}/chat`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message }),
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        message,
+      }),
     });
 
     if (!response.ok) {
-      throw new Error("Chat request failed");
+      let errorMessage = "Chat request failed.";
+
+      try {
+        const errorPayload = await response.json();
+
+        if (errorPayload?.detail) {
+          errorMessage = String(errorPayload.detail);
+        }
+      } catch {
+        // Use the default error message.
+      }
+
+      throw new Error(errorMessage);
     }
 
     const payload = await response.json();
-    appendMessage("bot", payload.answer, payload.sources ?? [], {
-      notice: payload.notice,
-      enableFeedback: true,
-    });
+
+    appendMessage(
+      "bot",
+      payload.answer || "No response was received.",
+      payload.sources ?? [],
+      {
+        notice: payload.notice,
+        enableFeedback: true,
+      }
+    );
   } catch (error) {
+    console.error("Chat request error:", error);
+
     appendMessage(
       "bot",
       "The assistant could not reach the backend. Please make sure the API server is running."
     );
   } finally {
     setComposerState(false);
+    messageInput?.focus();
   }
 });
 
-messageInput.addEventListener("input", autoResizeTextarea);
-messageInput.addEventListener("keydown", handleComposerKeydown);
+messageInput?.addEventListener("input", autoResizeTextarea);
+messageInput?.addEventListener("keydown", handleComposerKeydown);
 
-function getRuntimeConfig() {
-  const params = new URLSearchParams(window.location.search);
-  const apiBaseCandidate =
-    params.get("apiBase") ||
-    document.body.dataset.apiBase ||
-    window.PCL_GPT_CONFIG?.apiBaseUrl ||
-    DEFAULT_API_BASE_URL;
-
-  return {
-    apiBaseUrl: normalizeApiBase(apiBaseCandidate),
-    embedMode:
-      params.get("embed") === "1" || document.body.dataset.embed === "true",
-  };
-}
-
-function normalizeApiBase(value) {
-  const normalized = (value || DEFAULT_API_BASE_URL).trim();
-  return normalized.replace(/\/+$/, "");
-}
-
-function handleComposerKeydown(event) {
-  if (event.key !== "Enter") {
+function appendMessage(
+  role,
+  text,
+  sources = [],
+  meta = {}
+) {
+  if (!messages) {
     return;
   }
 
-  if (event.ctrlKey) {
-    const start = messageInput.selectionStart;
-    const end = messageInput.selectionEnd;
-    const value = messageInput.value;
-
-    messageInput.value = `${value.slice(0, start)}\n${value.slice(end)}`;
-    messageInput.selectionStart = messageInput.selectionEnd = start + 1;
-    autoResizeTextarea();
-    return;
-  }
-
-  event.preventDefault();
-  chatForm.requestSubmit();
-}
-
-async function checkHealth() {
-  if (window.location.protocol === "file:") {
-    statusNote.textContent =
-      "This page was opened from a local file. Open http://127.0.0.1:5500 instead so the chat can reach the backend.";
-    return;
-  }
-
-  try {
-    const response = await fetch(`${API_BASE_URL}/health`);
-    if (!response.ok) {
-      throw new Error("Health check failed");
-    }
-
-    const payload = await response.json();
-    statusNote.textContent = payload.gemini_configured
-      ? "Live Gemini is configured for richer responses."
-      : "Policy fallback mode is active until a Gemini API key is added.";
-  } catch (error) {
-    statusNote.textContent =
-      "Backend is offline. Start the local API to activate the assistant.";
-  }
-}
-
-function appendMessage(role, text, sources = [], meta = {}) {
   const article = document.createElement("article");
   article.className = `message ${role}`;
 
   const bubble = document.createElement("div");
   bubble.className = "message-bubble";
 
-  const body = document.createElement("p");
+  const body = document.createElement("div");
   body.className = "message-body";
-  body.textContent = text;
+
+  if (role === "bot") {
+    body.appendChild(formatAssistantAnswer(text));
+  } else {
+    body.textContent = String(text || "");
+  }
+
   bubble.appendChild(body);
 
   if (role === "bot" && meta.notice) {
     const note = document.createElement("p");
     note.className = "message-note";
-    note.textContent = meta.notice;
+    note.textContent = String(meta.notice);
+
     bubble.appendChild(note);
   }
 
-  if (role === "bot" && sources.length > 0) {
-    const sourceBlock = document.createElement("div");
-    sourceBlock.className = "sources";
-
-    const title = document.createElement("strong");
-    title.textContent = "Sources";
-    sourceBlock.appendChild(title);
-
-    sources.forEach((source) => {
-      const wrapper = document.createElement("div");
-      wrapper.className = "source-item";
-
-      const line = document.createElement("p");
-      const section = source.section ? `, ${source.section}` : "";
-      const page = source.page_number ? `, page ${source.page_number}` : "";
-      line.textContent = `${source.document_name}${section}${page}`;
-      wrapper.appendChild(line);
-
-      if (source.snippet) {
-        const snippet = document.createElement("p");
-        snippet.className = "source-snippet";
-        snippet.textContent = source.snippet;
-        wrapper.appendChild(snippet);
-      }
-
-      sourceBlock.appendChild(wrapper);
-    });
-
-    bubble.appendChild(sourceBlock);
+  if (
+    role === "bot" &&
+    Array.isArray(sources) &&
+    sources.length > 0
+  ) {
+    bubble.appendChild(createSourcesBlock(sources));
   }
 
   article.appendChild(bubble);
@@ -234,6 +203,257 @@ function appendMessage(role, text, sources = [], meta = {}) {
   messages.scrollTop = messages.scrollHeight;
 }
 
+function formatAssistantAnswer(answer) {
+  const container = document.createElement("div");
+  container.className = "formatted-answer";
+
+  const normalizedAnswer = normalizeAssistantAnswer(answer);
+
+  const lines = normalizedAnswer
+    .split(/\r?\n/)
+    .map((line) => line.trim());
+
+  let bulletList = null;
+
+  function closeBulletList() {
+    bulletList = null;
+  }
+
+  function getBulletList() {
+    if (bulletList) {
+      return bulletList;
+    }
+
+    bulletList = document.createElement("ul");
+    bulletList.className = "answer-bullet-list";
+
+    container.appendChild(bulletList);
+
+    return bulletList;
+  }
+
+  for (const rawLine of lines) {
+    if (!rawLine) {
+      closeBulletList();
+      continue;
+    }
+
+    const sectionMatch = rawLine.match(
+      /^\[\s*SECTION\s*\](.*?)\[\s*\/\s*SECTION\s*\]$/i
+    );
+
+    if (sectionMatch) {
+      closeBulletList();
+
+      const heading = document.createElement("h4");
+      heading.className = "answer-section-heading";
+      heading.textContent = sectionMatch[1].trim();
+
+      container.appendChild(heading);
+      continue;
+    }
+
+    const bulletMatch = rawLine.match(
+      /^\[\s*BULLET\s*\](.*?)\[\s*\/\s*BULLET\s*\]$/i
+    );
+
+    if (bulletMatch) {
+      const list = getBulletList();
+
+      const item = document.createElement("li");
+      item.textContent = bulletMatch[1].trim();
+
+      list.appendChild(item);
+      continue;
+    }
+
+    if (
+      rawLine.startsWith("• ") ||
+      rawLine.startsWith("- ") ||
+      rawLine.startsWith("* ")
+    ) {
+      const list = getBulletList();
+
+      const item = document.createElement("li");
+      item.textContent = rawLine.slice(2).trim();
+
+      list.appendChild(item);
+      continue;
+    }
+
+    closeBulletList();
+
+    const paragraph = document.createElement("p");
+    paragraph.className = "answer-paragraph";
+    paragraph.textContent = rawLine;
+
+    container.appendChild(paragraph);
+  }
+
+  if (!container.hasChildNodes()) {
+    const paragraph = document.createElement("p");
+    paragraph.className = "answer-paragraph";
+    paragraph.textContent = String(answer || "");
+
+    container.appendChild(paragraph);
+  }
+
+  return container;
+}
+
+function normalizeAssistantAnswer(answer) {
+  let text = String(answer || "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n");
+
+  // Remove Markdown headings.
+  text = text.replace(
+    /^\s*#{1,6}\s*/gm,
+    ""
+  );
+
+  // Remove Markdown bold and underline formatting.
+  text = text
+    .replace(/\*\*(.*?)\*\*/g, "$1")
+    .replace(/__(.*?)__/g, "$1");
+
+  // Normalize SECTION tags, including different casing and spacing.
+  text = text
+    .replace(
+      /\[\s*section\s*\]/gi,
+      "[SECTION]"
+    )
+    .replace(
+      /\[\s*\/\s*section\s*\]/gi,
+      "[/SECTION]"
+    );
+
+  // Normalize BULLET tags, including malformed casing.
+  text = text
+    .replace(
+      /\[\s*bullet\s*\]/gi,
+      "[BULLET]"
+    )
+    .replace(
+      /\[\s*\/\s*bullet\s*\]/gi,
+      "[/BULLET]"
+    );
+
+  // Ensure each SECTION tag is on a separate line.
+  text = text
+    .replace(
+      /\s*(\[SECTION\])/gi,
+      "\n$1"
+    )
+    .replace(
+      /(\[\/SECTION\])\s*/gi,
+      "$1\n"
+    );
+
+  // Ensure each BULLET tag is on a separate line.
+  text = text
+    .replace(
+      /\s*(\[BULLET\])/gi,
+      "\n$1"
+    )
+    .replace(
+      /(\[\/BULLET\])\s*/gi,
+      "$1\n"
+    );
+
+  // Convert inline bullet symbols into separate lines.
+  text = text.replace(
+    /\s+•\s+/g,
+    "\n• "
+  );
+
+  // Convert Markdown bullets to structured BULLET tags.
+  text = text.replace(
+    /^\s*[-*]\s+(.+)$/gm,
+    "[BULLET]$1[/BULLET]"
+  );
+
+  text = text.replace(
+    /^\s*•\s+(.+)$/gm,
+    "[BULLET]$1[/BULLET]"
+  );
+
+  // Repair an opening BULLET tag with a missing closing tag.
+  text = text.replace(
+    /\[BULLET\]([^\n]*?)(?=\n|$)/gi,
+    (fullMatch, content) => {
+      if (fullMatch.includes("[/BULLET]")) {
+        return fullMatch;
+      }
+
+      return `[BULLET]${content.trim()}[/BULLET]`;
+    }
+  );
+
+  // Repair an opening SECTION tag with a missing closing tag.
+  text = text.replace(
+    /\[SECTION\]([^\n]*?)(?=\n|$)/gi,
+    (fullMatch, content) => {
+      if (fullMatch.includes("[/SECTION]")) {
+        return fullMatch;
+      }
+
+      return `[SECTION]${content.trim()}[/SECTION]`;
+    }
+  );
+
+  // Remove excessive blank lines.
+  text = text.replace(
+    /\n{3,}/g,
+    "\n\n"
+  );
+
+  return text.trim();
+}
+
+function createSourcesBlock(sources) {
+  const sourceBlock = document.createElement("div");
+  sourceBlock.className = "sources";
+
+  const title = document.createElement("strong");
+  title.className = "sources-title";
+  title.textContent = "Sources";
+
+  sourceBlock.appendChild(title);
+
+  sources.forEach((source) => {
+    const wrapper = document.createElement("div");
+    wrapper.className = "source-item";
+
+    const line = document.createElement("p");
+
+    const section = source.section
+      ? `, ${source.section}`
+      : "";
+
+    const page = source.page_number
+      ? `, page ${source.page_number}`
+      : "";
+
+    line.textContent =
+      `${source.document_name || "Unknown document"}${section}${page}`;
+
+    wrapper.appendChild(line);
+
+    if (source.snippet) {
+      const snippet = document.createElement("p");
+      snippet.className = "source-snippet";
+      snippet.textContent = source.snippet;
+
+      wrapper.appendChild(snippet);
+    }
+
+    sourceBlock.appendChild(wrapper);
+  });
+
+  return sourceBlock;
+}
+
 function createFeedbackBar() {
   const wrapper = document.createElement("div");
   wrapper.className = "feedback-bar";
@@ -241,11 +461,13 @@ function createFeedbackBar() {
   const up = document.createElement("button");
   up.type = "button";
   up.className = "feedback-toggle";
+  up.setAttribute("aria-label", "Helpful response");
   up.innerHTML = "&#128077;";
 
   const down = document.createElement("button");
   down.type = "button";
   down.className = "feedback-toggle";
+  down.setAttribute("aria-label", "Unhelpful response");
   down.innerHTML = "&#128078;";
 
   up.addEventListener("click", () => {
@@ -260,38 +482,166 @@ function createFeedbackBar() {
 
   wrapper.appendChild(up);
   wrapper.appendChild(down);
+
   return wrapper;
 }
 
+function getRuntimeConfig() {
+  const params = new URLSearchParams(
+    window.location.search
+  );
+
+  const apiBaseCandidate =
+    params.get("apiBase") ||
+    document.body.dataset.apiBase ||
+    window.PCL_GPT_CONFIG?.apiBaseUrl ||
+    DEFAULT_API_BASE_URL;
+
+  return {
+    apiBaseUrl: normalizeApiBase(apiBaseCandidate),
+
+    embedMode:
+      params.get("embed") === "1" ||
+      document.body.dataset.embed === "true",
+  };
+}
+
+function normalizeApiBase(value) {
+  const normalized = String(
+    value || DEFAULT_API_BASE_URL
+  ).trim();
+
+  return normalized.replace(/\/+$/, "");
+}
+
+function handleComposerKeydown(event) {
+  if (event.key !== "Enter") {
+    return;
+  }
+
+  if (event.ctrlKey) {
+    const start = messageInput.selectionStart;
+    const end = messageInput.selectionEnd;
+    const value = messageInput.value;
+
+    messageInput.value =
+      `${value.slice(0, start)}\n${value.slice(end)}`;
+
+    messageInput.selectionStart =
+      messageInput.selectionEnd =
+        start + 1;
+
+    autoResizeTextarea();
+    return;
+  }
+
+  event.preventDefault();
+  chatForm?.requestSubmit();
+}
+
+async function checkHealth() {
+  if (!statusNote) {
+    return;
+  }
+
+  if (window.location.protocol === "file:") {
+    statusNote.textContent =
+      "Open the frontend through http://127.0.0.1:5500 so it can connect to the backend.";
+
+    return;
+  }
+
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/health`
+    );
+
+    if (!response.ok) {
+      throw new Error("Health check failed");
+    }
+
+    const payload = await response.json();
+
+    statusNote.textContent =
+      payload.gemini_configured
+        ? "Live Gemini is configured for richer responses."
+        : "Policy fallback mode is active until a Gemini API key is added.";
+  } catch (error) {
+    console.error(
+      "Health check error:",
+      error
+    );
+
+    statusNote.textContent =
+      "Backend is offline. Start the local API to activate the assistant.";
+  }
+}
+
 function setComposerState(isLoading) {
-  messageInput.disabled = isLoading;
-  sendButton.disabled = isLoading;
+  if (messageInput) {
+    messageInput.disabled = isLoading;
+  }
+
+  if (sendButton) {
+    sendButton.disabled = isLoading;
+  }
 }
 
 function setWidgetOpen(isOpen) {
-  chatWidget.classList.toggle("hidden", !isOpen);
-  launcherButton.classList.toggle("hidden", isOpen);
-  launcherButton.setAttribute("aria-expanded", String(isOpen));
+  if (!chatWidget || !launcherButton) {
+    return;
+  }
+
+  chatWidget.classList.toggle(
+    "hidden",
+    !isOpen
+  );
+
+  launcherButton.classList.toggle(
+    "hidden",
+    isOpen
+  );
+
+  launcherButton.setAttribute(
+    "aria-expanded",
+    String(isOpen)
+  );
 
   if (isOpen) {
-    messageInput.focus();
+    messageInput?.focus();
   }
 }
 
 function openFeedback() {
-  feedbackModal.classList.remove("hidden");
-  feedbackBackdrop.classList.remove("hidden");
+  feedbackModal?.classList.remove("hidden");
+  feedbackBackdrop?.classList.remove("hidden");
 }
 
 function closeFeedback() {
-  feedbackModal.classList.add("hidden");
-  feedbackBackdrop.classList.add("hidden");
-  feedbackInput.value = "";
+  feedbackModal?.classList.add("hidden");
+  feedbackBackdrop?.classList.add("hidden");
+
+  if (feedbackInput) {
+    feedbackInput.value = "";
+  }
+
   selectedRating = "";
-  feedbackChoices.forEach((item) => item.classList.remove("selected"));
+
+  feedbackChoices.forEach((item) => {
+    item.classList.remove("selected");
+  });
 }
 
 function autoResizeTextarea() {
+  if (!messageInput) {
+    return;
+  }
+
   messageInput.style.height = "auto";
-  messageInput.style.height = `${Math.min(messageInput.scrollHeight, 118)}px`;
+
+  messageInput.style.height =
+    `${Math.min(
+      messageInput.scrollHeight,
+      118
+    )}px`;
 }

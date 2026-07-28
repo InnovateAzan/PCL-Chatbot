@@ -2,24 +2,24 @@
   "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/package-solution.schema.json",
   "solution": {
     "name": "pcl-gpt-client-side-solution",
-    "id": "6f1df3f5-6adb-4273-b8df-e2972f4f3cbc",
+    "id": "ba31ea3f-152e-4236-8cbf-6e9c42a050b4",
     "version": "1.0.0.0",
-    "includeClientSideAssets": false,
+    "includeClientSideAssets": true,
     "skipFeatureDeployment": true,
     "isDomainIsolated": false,
     "developer": {
-      "name": "Pakistan Cables",
-      "websiteUrl": "https://pakistancable.sharepoint.com",
-      "privacyUrl": "https://pakistancable.sharepoint.com",
-      "termsOfUseUrl": "https://pakistancable.sharepoint.com",
+      "name": "",
+      "websiteUrl": "",
+      "privacyUrl": "",
+      "termsOfUseUrl": "",
       "mpnId": "Undefined-1.20.0"
     },
     "metadata": {
       "shortDescription": {
-        "default": "PCL GPT widget injector for One Desk."
+        "default": "pcl-gpt description"
       },
       "longDescription": {
-        "default": "Injects the floating PCL GPT widget onto SharePoint One Desk pages."
+        "default": "pcl-gpt description"
       },
       "screenshotPaths": [],
       "videoUrl": "",
@@ -27,13 +27,14 @@
     },
     "features": [
       {
-        "title": "PCL GPT One Desk Application Customizer",
-        "description": "Loads the PCL GPT floating chat widget.",
-        "id": "fd3539a0-1b3e-4d26-8d31-0d18e6835264",
+        "title": "Application Extension - Deployment of custom action",
+        "description": "Deploys a custom action with ClientSideComponentId association",
+        "id": "1ac65cdd-cee5-4cce-b691-00d225cb4ffb",
         "version": "1.0.0.0",
         "assets": {
           "elementManifests": [
-            "elements.xml"
+            "elements.xml",
+            "ClientSideInstance.xml"
           ]
         }
       }

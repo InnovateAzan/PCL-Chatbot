@@ -1,5 +1,5 @@
-define([], function () {
+define([], function() {
   return {
-    Title: 'PCL GPT One Desk'
-  };
+    "Title": "PclGptApplicationCustomizer"
+  }
 });

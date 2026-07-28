@@ -1,20 +1,29 @@
 {
-  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/serve.schema.json",
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/spfx-serve.schema.json",
   "port": 4321,
   "https": true,
-  "initialPage": "https://pakistancable.sharepoint.com/SitePages/onedesk.aspx",
+  "initialPage": "https://pakistancable.sharepoint.com/SitePages/Onedesk.aspx",
   "serveConfigurations": {
     "default": {
-      "pageUrl": "https://pakistancable.sharepoint.com/SitePages/onedesk.aspx",
+      "pageUrl": "https://pakistancable.sharepoint.com/SitePages/Onedesk.aspx",
       "customActions": {
-        "6c32fa18-a5fd-4e3c-bf16-bce8f08d5f10": {
+        "831634c3-abee-4a50-8822-bf2349e02ebb": {
           "location": "ClientSideExtension.ApplicationCustomizer",
           "properties": {
-            "loaderScriptUrl": "https://your-chat-host.example.com/sharepoint-loader.js",
-            "embedUrl": "https://your-chat-host.example.com/embed.html?apiBase=https%3A%2F%2Fyour-chat-host.example.com%2Fapi",
-            "widgetWidth": 460,
-            "widgetHeight": 720,
-            "openByDefault": true
+            "chatbotUrl": "http://127.0.0.1:5500/?embed=1",
+            "oneDeskPath": "/SitePages/Onedesk.aspx"
+          }
+        }
+      }
+    },
+    "pclGpt": {
+      "pageUrl": "https://pakistancable.sharepoint.com/SitePages/Onedesk.aspx",
+      "customActions": {
+        "831634c3-abee-4a50-8822-bf2349e02ebb": {
+          "location": "ClientSideExtension.ApplicationCustomizer",
+          "properties": {
+            "chatbotUrl": "http://127.0.0.1:5500/?embed=1",
+            "oneDeskPath": "/SitePages/Onedesk.aspx"
           }
         }
       }

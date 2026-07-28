@@ -1,15 +1,22 @@
 {
   "@microsoft/generator-sharepoint": {
+    "plusBeta": false,
+    "isCreatingSolution": true,
+    "nodeVersion": "18.20.8",
+    "sdksVersions": {
+      "@microsoft/microsoft-graph-client": "3.0.2",
+      "@microsoft/teams-js": "2.24.0"
+    },
     "version": "1.20.0",
-    "libraryName": "pcl-gpt-spfx",
+    "libraryName": "pcl-gpt",
+    "libraryId": "ba31ea3f-152e-4236-8cbf-6e9c42a050b4",
     "environment": "spo",
     "packageManager": "npm",
-    "solutionName": "pcl-gpt-spfx",
-    "solutionShortDescription": "Pakistan Cables One Desk floating chat widget.",
+    "solutionName": "pcl-gpt",
+    "solutionShortDescription": "pcl-gpt description",
     "skipFeatureDeployment": true,
     "isDomainIsolated": false,
     "componentType": "extension",
-    "extensionType": "ApplicationCustomizer",
-    "plusBeta": false
+    "extensionType": "ApplicationCustomizer"
   }
 }

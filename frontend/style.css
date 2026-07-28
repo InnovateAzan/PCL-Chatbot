@@ -683,3 +683,124 @@ textarea::placeholder {
     gap: 18px;
   }
 }
+/* =========================================================
+   FORMATTED CHATBOT ANSWERS
+   ========================================================= */
+
+.formatted-answer {
+  display: block;
+  width: 100%;
+  color: #29242d;
+  font-size: 16px;
+  line-height: 1.6;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+}
+
+.answer-paragraph {
+  margin: 0 0 13px;
+  padding: 0;
+  line-height: 1.6;
+}
+
+.answer-section-heading {
+  margin: 18px 0 8px;
+  padding: 0;
+  color: #211d24;
+  font-family: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.4;
+}
+
+.answer-bullet-list {
+  margin: 3px 0 15px;
+  padding-left: 22px;
+  list-style-type: disc;
+}
+
+.answer-bullet-list li {
+  display: list-item;
+  margin: 0 0 8px;
+  padding-left: 2px;
+  color: #29242d;
+  font-size: 16px;
+  line-height: 1.55;
+}
+
+.answer-bullet-list li::marker {
+  color: #29242d;
+  font-size: 0.9em;
+}
+
+.formatted-answer > :first-child {
+  margin-top: 0;
+}
+
+.formatted-answer > :last-child {
+  margin-bottom: 0;
+}
+
+.message.bot .message-body {
+  white-space: normal;
+}
+
+.message.user .message-body {
+  white-space: pre-wrap;
+}
+
+.message-note {
+  margin: 14px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid #eee7f1;
+  color: #807886;
+  font-size: 13px;
+  font-style: normal;
+  line-height: 1.45;
+}
+
+.sources {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid #e9e1ec;
+}
+
+.sources-title {
+  display: block;
+  margin-bottom: 10px;
+  color: #28222b;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.source-item {
+  margin: 0 0 10px;
+}
+
+.source-item:last-child {
+  margin-bottom: 0;
+}
+
+.source-item p {
+  margin: 0;
+  color: #756e79;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.source-snippet {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  .formatted-answer,
+  .answer-bullet-list li,
+  .answer-section-heading {
+    font-size: 15px;
+  }
+
+  .answer-bullet-list {
+    padding-left: 20px;
+  }
+}
