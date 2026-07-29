@@ -25,6 +25,14 @@ body {
   min-height: 100%;
 }
 
+html.embed-mode,
+body.embed-mode {
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
 body {
   font-family: "Aptos", "Segoe UI", sans-serif;
   color: var(--widget-text);
@@ -35,6 +43,29 @@ body {
 
 body.embed-mode {
   background: transparent;
+}
+
+html.embed-mode,
+body.embed-mode,
+body.embed-mode * {
+  scrollbar-width: none;
+}
+
+body.embed-mode::-webkit-scrollbar,
+body.embed-mode *::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+body.hosted-mode {
+  background: transparent;
+  overflow: hidden;
+}
+
+html.hosted-mode {
+  width: 100%;
+  min-height: 0;
+  overflow: hidden;
 }
 
 button,
@@ -123,11 +154,24 @@ body.embed-mode .page-shell {
   display: none;
 }
 
+body.hosted-mode .page-shell {
+  display: none;
+}
+
 body.embed-mode .widget-layer {
   position: static;
   right: auto;
   bottom: auto;
-  width: min(100vw - 10px, 460px);
+  width: 100%;
+  height: 100%;
+}
+
+body.hosted-mode .widget-layer {
+  position: static;
+  right: auto;
+  bottom: auto;
+  width: max-content;
+  min-height: 0;
 }
 
 body.embed-mode .launcher {
@@ -212,8 +256,63 @@ body.embed-mode .launcher {
 
 body.embed-mode .chat-widget {
   width: 100%;
-  min-height: 680px;
-  max-height: calc(100vh - 10px);
+  height: 100%;
+  min-height: 0;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+body.embed-mode .widget-header {
+  min-height: 106px;
+  padding: 24px 30px;
+}
+
+body.embed-mode .widget-brand {
+  flex: 1 1 auto;
+}
+
+body.embed-mode .widget-actions {
+  flex: 0 0 auto;
+}
+
+body.embed-mode .widget-subtitle {
+  max-width: min(270px, 32vw);
+}
+
+body.embed-mode .messages {
+  padding: 30px;
+}
+
+body.embed-mode .composer {
+  padding: 22px 30px 16px;
+}
+
+body.embed-mode .widget-footer {
+  padding: 0 30px 22px;
+}
+
+body.hosted-mode .launcher {
+  position: static;
+  right: auto;
+  bottom: auto;
+  display: inline-flex;
+}
+
+body.hosted-mode .launcher.hidden {
+  display: none;
+}
+
+body.hosted-mode .chat-widget {
+  position: static;
+  width: 580px;
+  min-height: 698px;
+  max-height: 698px;
+}
+
+body.hosted-mode .chat-widget.hidden {
+  display: none;
 }
 
 .chat-widget.hidden {
@@ -273,7 +372,11 @@ body.embed-mode .chat-widget.hidden {
 }
 
 body.embed-mode #collapseButton {
-  display: none;
+  display: inline-grid;
+}
+
+body.hosted-mode #collapseButton {
+  display: inline-grid;
 }
 
 .header-button,
@@ -320,6 +423,16 @@ body.embed-mode #collapseButton {
   flex-direction: column;
   gap: 26px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 1), rgba(252, 249, 252, 1));
+  scrollbar-width: none;
+}
+
+.messages::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
+body.embed-mode .messages:empty {
+  overflow-y: hidden;
 }
 
 .message {
@@ -494,6 +607,23 @@ textarea::placeholder {
   box-shadow: var(--shadow-lg);
 }
 
+body.embed-mode .feedback-modal {
+  top: 50%;
+  right: auto;
+  bottom: auto;
+  left: 50%;
+  width: min(488px, calc(100vw - 44px));
+  max-height: calc(100vh - 44px);
+  overflow-y: auto;
+  transform: translate(-50%, -50%);
+  scrollbar-width: none;
+}
+
+body.embed-mode .feedback-modal::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+}
+
 .feedback-modal.hidden,
 .feedback-backdrop.hidden {
   display: none;
@@ -597,6 +727,17 @@ textarea::placeholder {
   cursor: pointer;
 }
 
+.submit-feedback:disabled {
+  opacity: 0.58;
+  cursor: not-allowed;
+}
+
+.submit-feedback.ready {
+  background: linear-gradient(180deg, #0f9a4f, #0b8a3e);
+  color: #ffffff;
+  box-shadow: 0 14px 34px rgba(11, 138, 62, 0.22);
+}
+
 .skip-feedback {
   display: block;
   margin: 20px auto 0;
@@ -653,7 +794,8 @@ textarea::placeholder {
   }
 
   body.embed-mode .widget-layer {
-    width: min(100vw - 6px, 460px);
+    width: 100%;
+    height: 100%;
   }
 
   .widget-header,

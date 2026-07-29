@@ -10,7 +10,8 @@
         "831634c3-abee-4a50-8822-bf2349e02ebb": {
           "location": "ClientSideExtension.ApplicationCustomizer",
           "properties": {
-            "chatbotUrl": "http://127.0.0.1:5500/?embed=1",
+            "enabled": true,
+            "chatbotUrl": "http://127.0.0.1:5500/embed.html",
             "oneDeskPath": "/SitePages/Onedesk.aspx"
           }
         }
@@ -22,7 +23,8 @@
         "831634c3-abee-4a50-8822-bf2349e02ebb": {
           "location": "ClientSideExtension.ApplicationCustomizer",
           "properties": {
-            "chatbotUrl": "http://127.0.0.1:5500/?embed=1",
+            "enabled": true,
+            "chatbotUrl": "http://127.0.0.1:5500/embed.html",
             "oneDeskPath": "/SitePages/Onedesk.aspx"
           }
         }

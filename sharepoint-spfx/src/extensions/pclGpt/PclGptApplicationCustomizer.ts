@@ -1,6 +1,7 @@
 import { BaseApplicationCustomizer } from "@microsoft/sp-application-base";
 
 export interface IPclGptApplicationCustomizerProperties {
+  enabled?: boolean;
   chatbotUrl?: string;
   oneDeskPath?: string;
 }
@@ -8,10 +9,10 @@ export interface IPclGptApplicationCustomizerProperties {
 export default class PclGptApplicationCustomizer
   extends BaseApplicationCustomizer<IPclGptApplicationCustomizerProperties> {
 
-  private launcherRoot: HTMLDivElement | undefined;
-  private panelRoot: HTMLDivElement | undefined;
-  private overlayRoot: HTMLDivElement | undefined;
+  private root: HTMLDivElement | undefined;
   private launcherButton: HTMLButtonElement | undefined;
+  private panel: HTMLDivElement | undefined;
+  private overlay: HTMLDivElement | undefined;
 
   public onInit(): Promise<void> {
     const currentPath = window.location.pathname
@@ -29,306 +30,312 @@ export default class PclGptApplicationCustomizer
       currentPath === expectedPath ||
       currentPath.indexOf(expectedPath) >= 0;
 
-    console.log("PCL GPT extension loaded");
+    console.log("One Bot extension loaded");
     console.log("Current path:", currentPath);
     console.log("Expected path:", expectedPath);
 
     if (!isOneDeskPage) {
-      console.log("PCL GPT hidden because this is not One Desk.");
+      console.log("One Bot hidden because this is not One Desk.");
+      return Promise.resolve();
+    }
+
+    if (this.properties.enabled === false) {
+      console.log("One Bot is disabled for SharePoint.");
       return Promise.resolve();
     }
 
     this.renderLauncher();
 
+    window.addEventListener(
+      "message",
+      this.handleWidgetMessage
+    );
+
+    window.addEventListener(
+      "keydown",
+      this.handleEscapeKey
+    );
+
     return Promise.resolve();
   }
 
   private renderLauncher(): void {
-    if (document.getElementById("pcl-gpt-launcher-root")) {
+    if (document.getElementById("pcl-gpt-sharepoint-root")) {
       return;
     }
 
-    this.launcherRoot = document.createElement("div");
-    this.launcherRoot.id = "pcl-gpt-launcher-root";
+    this.root = document.createElement("div");
+    this.root.id = "pcl-gpt-sharepoint-root";
+
+    this.root.style.position = "fixed";
+    this.root.style.right = "28px";
+    this.root.style.bottom = "28px";
+    this.root.style.zIndex = "999999";
+    this.root.style.overflow = "visible";
+    this.root.style.fontFamily =
+      "Aptos, Segoe UI, Arial, sans-serif";
 
     this.launcherButton = document.createElement("button");
-    this.launcherButton.id = "pcl-gpt-launcher-button";
     this.launcherButton.type = "button";
-    this.launcherButton.setAttribute("aria-label", "Open PCL GPT");
-    this.launcherButton.setAttribute("aria-expanded", "false");
+    this.launcherButton.setAttribute(
+      "aria-label",
+      "Open One Bot"
+    );
+    this.launcherButton.setAttribute(
+      "aria-expanded",
+      "false"
+    );
 
-    Object.assign(this.launcherButton.style, {
-      position: "fixed",
-      right: "28px",
-      bottom: "28px",
-      zIndex: "999999",
-      display: "flex",
-      alignItems: "center",
-      gap: "14px",
-      padding: "0",
-      border: "none",
-      background: "transparent",
-      cursor: "pointer",
-      fontFamily: "Segoe UI, Arial, sans-serif"
-    });
+    this.launcherButton.style.display = "inline-flex";
+    this.launcherButton.style.alignItems = "center";
+    this.launcherButton.style.gap = "12px";
+    this.launcherButton.style.padding = "0";
+    this.launcherButton.style.border = "0";
+    this.launcherButton.style.background = "transparent";
+    this.launcherButton.style.cursor = "pointer";
 
     const label = document.createElement("span");
-    label.textContent = "PCL GPT";
+    label.textContent = "One Bot";
 
-    Object.assign(label.style, {
-      minWidth: "165px",
-      padding: "17px 28px",
-      borderRadius: "999px",
-      background: "#ffffff",
-      color: "#008744",
-      boxShadow: "0 14px 35px rgba(25, 45, 32, 0.18)",
-      fontSize: "19px",
-      fontWeight: "700",
-      textAlign: "center",
-      transition: "transform 160ms ease, box-shadow 160ms ease"
-    });
+    label.style.minWidth = "154px";
+    label.style.height = "44px";
+    label.style.padding = "0 28px";
+    label.style.display = "inline-flex";
+    label.style.alignItems = "center";
+    label.style.justifyContent = "center";
+    label.style.borderRadius = "999px";
+    label.style.background = "#ffffff";
+    label.style.boxShadow =
+      "0 14px 34px rgba(18, 71, 41, 0.12)";
+    label.style.color = "#0b8a3e";
+    label.style.fontSize = "17px";
+    label.style.fontWeight = "700";
+    label.style.boxSizing = "border-box";
+    label.style.transition =
+      "transform 160ms ease, box-shadow 160ms ease";
 
-    const logoCircle = document.createElement("span");
+    const mark = document.createElement("span");
 
-    Object.assign(logoCircle.style, {
-      width: "62px",
-      height: "62px",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      borderRadius: "50%",
-      background: "#ffffff",
-      boxShadow: "0 14px 35px rgba(25, 45, 32, 0.18)",
-      transition: "transform 160ms ease, box-shadow 160ms ease"
-    });
+    mark.style.width = "50px";
+    mark.style.height = "50px";
+    mark.style.display = "inline-grid";
+    mark.style.placeItems = "center";
+    mark.style.borderRadius = "50%";
+    mark.style.background = "#ffffff";
+    mark.style.boxShadow =
+      "0 14px 34px rgba(18, 71, 41, 0.12)";
+    mark.style.boxSizing = "border-box";
+    mark.style.transition =
+      "transform 160ms ease, box-shadow 160ms ease";
 
-    const logoText = document.createElement("span");
-    logoText.textContent = "PCL";
+    const logo = document.createElement("img");
+    logo.src = this.getLogoUrl();
+    logo.alt = "Pakistan Cables";
 
-    Object.assign(logoText.style, {
-      width: "43px",
-      height: "43px",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      border: "2px solid #008744",
-      borderRadius: "50%",
-      color: "#008744",
-      fontSize: "11px",
-      fontWeight: "800"
-    });
+    logo.style.width = "34px";
+    logo.style.height = "34px";
+    logo.style.objectFit = "contain";
+    logo.style.display = "block";
 
-    logoCircle.appendChild(logoText);
+    mark.appendChild(logo);
 
     this.launcherButton.appendChild(label);
-    this.launcherButton.appendChild(logoCircle);
+    this.launcherButton.appendChild(mark);
 
-    this.launcherButton.addEventListener("mouseenter", () => {
-      label.style.transform = "translateY(-2px)";
-      logoCircle.style.transform = "translateY(-2px)";
-    });
+    this.launcherButton.addEventListener(
+      "mouseenter",
+      () => {
+        label.style.transform = "translateY(-2px)";
+        mark.style.transform = "translateY(-2px)";
+      }
+    );
 
-    this.launcherButton.addEventListener("mouseleave", () => {
-      label.style.transform = "translateY(0)";
-      logoCircle.style.transform = "translateY(0)";
-    });
+    this.launcherButton.addEventListener(
+      "mouseleave",
+      () => {
+        label.style.transform = "translateY(0)";
+        mark.style.transform = "translateY(0)";
+      }
+    );
 
-    this.launcherButton.addEventListener("click", () => {
-      if (this.panelRoot) {
-        this.closePanel();
-      } else {
+    this.launcherButton.addEventListener(
+      "click",
+      () => {
         this.openPanel();
       }
-    });
+    );
 
-    this.launcherRoot.appendChild(this.launcherButton);
-    document.body.appendChild(this.launcherRoot);
+    this.root.appendChild(this.launcherButton);
+    document.body.appendChild(this.root);
   }
 
   private openPanel(): void {
-    const chatbotUrl =
-      this.properties.chatbotUrl ||
-      "http://127.0.0.1:5500/?embed=1";
+    if (
+      this.panel ||
+      !this.root ||
+      !this.launcherButton
+    ) {
+      return;
+    }
 
-    this.overlayRoot = document.createElement("div");
-    this.overlayRoot.id = "pcl-gpt-overlay";
+    this.launcherButton.style.display = "none";
+    this.launcherButton.setAttribute(
+      "aria-expanded",
+      "true"
+    );
 
-    Object.assign(this.overlayRoot.style, {
-      position: "fixed",
-      inset: "0",
-      zIndex: "999997",
-      background: "rgba(24, 31, 27, 0.18)",
-      backdropFilter: "blur(1px)"
-    });
+    this.overlay = document.createElement("div");
+    this.overlay.id = "pcl-gpt-sharepoint-overlay";
 
-    this.overlayRoot.addEventListener("click", () => {
-      this.closePanel();
-    });
+    this.overlay.style.position = "fixed";
+    this.overlay.style.top = "0";
+    this.overlay.style.right = "0";
+    this.overlay.style.bottom = "0";
+    this.overlay.style.left = "0";
+    this.overlay.style.zIndex = "999997";
+    this.overlay.style.background =
+      "rgba(24, 31, 27, 0.16)";
+    this.overlay.style.setProperty(
+      "backdrop-filter",
+      "blur(1px)"
+    );
 
-    this.panelRoot = document.createElement("div");
-    this.panelRoot.id = "pcl-gpt-panel";
-    this.panelRoot.setAttribute("role", "dialog");
-    this.panelRoot.setAttribute("aria-label", "PCL GPT");
+    this.overlay.addEventListener(
+      "click",
+      () => {
+        this.closePanel();
+      }
+    );
 
-    Object.assign(this.panelRoot.style, {
-      position: "fixed",
-      top: "92px",
-      right: "24px",
-      bottom: "24px",
-      width: "620px",
-      maxWidth: "calc(100vw - 48px)",
-      zIndex: "999998",
-      display: "flex",
-      flexDirection: "column",
-      overflow: "hidden",
-      border: "1px solid rgba(0, 135, 68, 0.12)",
-      borderRadius: "26px",
-      background: "#ffffff",
-      boxShadow: "0 24px 70px rgba(20, 36, 27, 0.28)"
-    });
+    this.panel = document.createElement("div");
+    this.panel.id = "pcl-gpt-sharepoint-panel";
+    this.panel.setAttribute("role", "dialog");
+    this.panel.setAttribute("aria-label", "One Bot");
 
-    const header = document.createElement("div");
-
-    Object.assign(header.style, {
-      minHeight: "74px",
-      padding: "12px 18px",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "space-between",
-      gap: "12px",
-      borderBottom: "1px solid #eee8ef",
-      background: "#ffffff"
-    });
-
-    const identity = document.createElement("div");
-
-    Object.assign(identity.style, {
-      display: "flex",
-      alignItems: "center",
-      gap: "12px"
-    });
-
-    const headerLogo = document.createElement("div");
-    headerLogo.textContent = "PCL";
-
-    Object.assign(headerLogo.style, {
-      width: "42px",
-      height: "42px",
-      display: "flex",
-      alignItems: "center",
-      justifyContent: "center",
-      border: "2px solid #008744",
-      borderRadius: "50%",
-      color: "#008744",
-      fontSize: "11px",
-      fontWeight: "800"
-    });
-
-    const titleWrapper = document.createElement("div");
-
-    Object.assign(titleWrapper.style, {
-      display: "flex",
-      flexDirection: "column",
-      gap: "2px"
-    });
-
-    const title = document.createElement("strong");
-    title.textContent = "PCL GPT";
-
-    Object.assign(title.style, {
-      fontSize: "18px",
-      color: "#202124"
-    });
-
-    const subtitle = document.createElement("span");
-    subtitle.textContent = "Pakistan Cables IT Policy Assistant";
-
-    Object.assign(subtitle.style, {
-      fontSize: "13px",
-      color: "#7b747f"
-    });
-
-    titleWrapper.appendChild(title);
-    titleWrapper.appendChild(subtitle);
-
-    identity.appendChild(headerLogo);
-    identity.appendChild(titleWrapper);
-
-    const closeButton = document.createElement("button");
-    closeButton.type = "button";
-    closeButton.textContent = "×";
-    closeButton.setAttribute("aria-label", "Close PCL GPT");
-
-    Object.assign(closeButton.style, {
-      width: "42px",
-      height: "42px",
-      border: "1px solid #dcd6df",
-      borderRadius: "50%",
-      background: "#ffffff",
-      color: "#37313a",
-      cursor: "pointer",
-      fontSize: "27px",
-      lineHeight: "1"
-    });
-
-    closeButton.addEventListener("click", () => {
-      this.closePanel();
-    });
+    this.panel.style.position = "fixed";
+    this.panel.style.top = "92px";
+    this.panel.style.right = "24px";
+    this.panel.style.bottom = "24px";
+    this.panel.style.width = "620px";
+    this.panel.style.height = "calc(100vh - 116px)";
+    this.panel.style.maxWidth = "calc(100vw - 48px)";
+    this.panel.style.maxHeight = "calc(100vh - 116px)";
+    this.panel.style.zIndex = "999998";
+    this.panel.style.display = "block";
+    this.panel.style.padding = "0";
+    this.panel.style.margin = "0";
+    this.panel.style.overflow = "hidden";
+    this.panel.style.border =
+      "1px solid rgba(0, 135, 68, 0.12)";
+    this.panel.style.borderRadius = "26px";
+    this.panel.style.background = "#ffffff";
+    this.panel.style.boxShadow =
+      "0 24px 70px rgba(20, 36, 27, 0.28)";
+    this.panel.style.boxSizing = "border-box";
 
     const iframe = document.createElement("iframe");
-    iframe.src = chatbotUrl;
-    iframe.title = "PCL GPT";
+    iframe.id = "pcl-gpt-frame";
+    iframe.src = this.getChatbotUrl();
+    iframe.title = "One Bot";
+
     iframe.setAttribute(
       "allow",
       "clipboard-read; clipboard-write"
     );
 
-    Object.assign(iframe.style, {
-      width: "100%",
-      height: "100%",
-      flex: "1 1 auto",
-      border: "0",
-      background: "#ffffff"
-    });
+    iframe.style.position = "absolute";
+    iframe.style.top = "0";
+    iframe.style.right = "0";
+    iframe.style.bottom = "0";
+    iframe.style.left = "0";
+    iframe.style.width = "100%";
+    iframe.style.height = "100%";
+    iframe.style.minWidth = "0";
+    iframe.style.minHeight = "0";
+    iframe.style.maxWidth = "100%";
+    iframe.style.maxHeight = "100%";
+    iframe.style.display = "block";
+    iframe.style.margin = "0";
+    iframe.style.padding = "0";
+    iframe.style.border = "0";
+    iframe.style.background = "#ffffff";
+    iframe.style.boxSizing = "border-box";
 
-    header.appendChild(identity);
-    header.appendChild(closeButton);
+    this.panel.appendChild(iframe);
 
-    this.panelRoot.appendChild(header);
-    this.panelRoot.appendChild(iframe);
-
-    document.body.appendChild(this.overlayRoot);
-    document.body.appendChild(this.panelRoot);
-
-    this.launcherButton?.setAttribute("aria-expanded", "true");
+    document.body.appendChild(this.overlay);
+    document.body.appendChild(this.panel);
 
     this.applyResponsivePanelSize();
-    window.addEventListener("resize", this.applyResponsivePanelSize);
+
+    window.addEventListener(
+      "resize",
+      this.applyResponsivePanelSize
+    );
   }
 
-  private applyResponsivePanelSize = (): void => {
-    if (!this.panelRoot) {
+  private getChatbotUrl(): string {
+    const rawChatbotUrl =
+      this.properties.chatbotUrl ||
+      "http://127.0.0.1:5500/?embed=1";
+
+    try {
+      const url = new URL(
+        rawChatbotUrl,
+        window.location.href
+      );
+
+      url.searchParams.set("embed", "1");
+
+      return url.toString();
+    } catch {
+      const separator =
+        rawChatbotUrl.indexOf("?") >= 0
+          ? "&"
+          : "?";
+
+      return `${rawChatbotUrl}${separator}embed=1`;
+    }
+  }
+
+  private getLogoUrl(): string {
+    const rawChatbotUrl =
+      this.properties.chatbotUrl ||
+      "http://127.0.0.1:5500/";
+
+    try {
+      return new URL(
+        "/assets/pcl-logo.png",
+        rawChatbotUrl
+      ).toString();
+    } catch {
+      return "http://127.0.0.1:5500/assets/pcl-logo.png";
+    }
+  }
+
+  private handleWidgetMessage = (
+    event: MessageEvent
+  ): void => {
+    const messageType = event.data?.type;
+
+    if (
+      messageType !== "pcl-gpt:close" &&
+      messageType !== "PCL_GPT_CLOSE"
+    ) {
       return;
     }
 
-    if (window.innerWidth <= 768) {
-      Object.assign(this.panelRoot.style, {
-        top: "10px",
-        right: "10px",
-        bottom: "10px",
-        width: "calc(100vw - 20px)",
-        maxWidth: "none",
-        borderRadius: "20px"
-      });
-    } else {
-      Object.assign(this.panelRoot.style, {
-        top: "92px",
-        right: "24px",
-        bottom: "24px",
-        width: "620px",
-        maxWidth: "calc(100vw - 48px)",
-        borderRadius: "26px"
-      });
+    this.closePanel();
+  };
+
+  private handleEscapeKey = (
+    event: KeyboardEvent
+  ): void => {
+    if (
+      event.key === "Escape" &&
+      this.panel
+    ) {
+      this.closePanel();
     }
   };
 
@@ -338,16 +345,79 @@ export default class PclGptApplicationCustomizer
       this.applyResponsivePanelSize
     );
 
-    this.panelRoot?.remove();
-    this.overlayRoot?.remove();
+    if (this.panel) {
+      this.panel.remove();
+      this.panel = undefined;
+    }
 
-    this.panelRoot = undefined;
-    this.overlayRoot = undefined;
+    if (this.overlay) {
+      this.overlay.remove();
+      this.overlay = undefined;
+    }
 
-    this.launcherButton?.setAttribute("aria-expanded", "false");
+    if (this.launcherButton) {
+      this.launcherButton.style.display =
+        "inline-flex";
+
+      this.launcherButton.setAttribute(
+        "aria-expanded",
+        "false"
+      );
+    }
   }
 
+  private applyResponsivePanelSize = (): void => {
+    if (!this.panel || !this.root) {
+      return;
+    }
+
+    const compactViewport =
+      window.innerWidth <= 768;
+
+    if (compactViewport) {
+      this.panel.style.top = "10px";
+      this.panel.style.right = "10px";
+      this.panel.style.bottom = "10px";
+      this.panel.style.width =
+        "calc(100vw - 20px)";
+      this.panel.style.height =
+        "calc(100vh - 20px)";
+      this.panel.style.maxWidth = "none";
+      this.panel.style.maxHeight =
+        "calc(100vh - 20px)";
+      this.panel.style.borderRadius = "20px";
+
+      this.root.style.right = "10px";
+      this.root.style.bottom = "10px";
+    } else {
+      this.panel.style.top = "92px";
+      this.panel.style.right = "24px";
+      this.panel.style.bottom = "24px";
+      this.panel.style.width = "620px";
+      this.panel.style.height =
+        "calc(100vh - 116px)";
+      this.panel.style.maxWidth =
+        "calc(100vw - 48px)";
+      this.panel.style.maxHeight =
+        "calc(100vh - 116px)";
+      this.panel.style.borderRadius = "26px";
+
+      this.root.style.right = "28px";
+      this.root.style.bottom = "28px";
+    }
+  };
+
   protected onDispose(): void {
+    window.removeEventListener(
+      "message",
+      this.handleWidgetMessage
+    );
+
+    window.removeEventListener(
+      "keydown",
+      this.handleEscapeKey
+    );
+
     window.removeEventListener(
       "resize",
       this.applyResponsivePanelSize
@@ -355,8 +425,13 @@ export default class PclGptApplicationCustomizer
 
     this.closePanel();
 
-    this.launcherRoot?.remove();
-    this.launcherRoot = undefined;
+    if (this.root) {
+      this.root.remove();
+      this.root = undefined;
+    }
+
     this.launcherButton = undefined;
+    this.panel = undefined;
+    this.overlay = undefined;
   }
 }

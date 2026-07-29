@@ -70,7 +70,7 @@ class PolicyChatbot:
                 sources=sources,
                 fallback=False,
                 provider="gemini-policy",
-                notice=policy_notice,
+                notice=self._build_policy_reference_notice(sources),
             )
 
         fallback_answer = self._build_policy_fallback_answer()
@@ -80,7 +80,10 @@ class PolicyChatbot:
             sources=sources,
             fallback=True,
             provider="policy-rules",
-            notice=policy_notice,
+            notice=(
+                policy_notice
+                or self._build_policy_reference_notice(sources)
+            ),
         )
 
     def health_snapshot(self) -> dict[str, str | bool]:
@@ -224,7 +227,7 @@ class PolicyChatbot:
         context = "\n\n".join(context_blocks)
 
         return (
-            "You are Pakistan Cables IT Policy Assistant.\n"
+            "You are Pakistan Cables OneBot.\n"
             "Answer only from the policy context supplied below.\n"
             "Do not invent internal rules, limits, approvals, timelines, "
             "roles, controls, procedures or requirements.\n"
@@ -310,7 +313,7 @@ class PolicyChatbot:
 
         return (
             answer,
-            "This answer is AI-generated and not based on company policy.",
+            "Sources: Gemini general knowledge; not from PCL policy.",
         )
 
     def _build_general_prompt(
@@ -318,7 +321,7 @@ class PolicyChatbot:
         message: str,
     ) -> str:
         return (
-            "You are Pakistan Cables PCL GPT.\n"
+            "You are Pakistan Cables OneBot.\n"
             "The policy knowledge base did not contain a reliable answer.\n"
             "Answer using accurate general knowledge.\n"
             "Do not claim that the answer comes from Pakistan Cables policy.\n"
@@ -364,6 +367,30 @@ class PolicyChatbot:
             "[/BULLET]\n"
             "[BULLET]Contact the IT Service Desk if clarification is needed"
             "[/BULLET]"
+        )
+
+    @staticmethod
+    def _build_policy_reference_notice(
+        sources: list[SourceReference],
+    ) -> str:
+        document_names: list[str] = []
+
+        for source in sources:
+            name = source.document_name.strip()
+
+            if name and name not in document_names:
+                document_names.append(name)
+
+            if len(document_names) >= 3:
+                break
+
+        if not document_names:
+            return "Sources: PCL policy knowledge base."
+
+        return (
+            "Sources: PCL policy - "
+            + "; ".join(document_names)
+            + "."
         )
 
     def _handle_gemini_error(
@@ -623,7 +650,7 @@ class PolicyChatbot:
         if normalized in greetings:
             return (
                 "Assalam o Alaikum!\n\n"
-                "I am the Pakistan Cables IT Policy Assistant.\n\n"
+                "I am the Pakistan Cables OneBot.\n\n"
                 "[SECTION]How I Can Help[/SECTION]\n"
                 "[BULLET]Ask about available Pakistan Cables policies"
                 "[/BULLET]\n"

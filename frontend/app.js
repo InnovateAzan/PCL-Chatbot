@@ -3,6 +3,8 @@ const DEFAULT_API_BASE_URL = "http://127.0.0.1:8085/api";
 const runtimeConfig = getRuntimeConfig();
 const API_BASE_URL = runtimeConfig.apiBaseUrl;
 const EMBED_MODE = runtimeConfig.embedMode;
+const HOSTED_MODE = runtimeConfig.hostedMode;
+const DEFAULT_OPEN = runtimeConfig.defaultOpen;
 
 const chatForm = document.getElementById("chatForm");
 const sendButton = document.getElementById("sendButton");
@@ -31,8 +33,16 @@ const feedbackChoices = document.querySelectorAll(".feedback-choice");
 let selectedRating = "";
 
 document.body.classList.toggle("embed-mode", EMBED_MODE);
+document.body.classList.toggle("hosted-mode", HOSTED_MODE);
+document.documentElement.classList.toggle("embed-mode", EMBED_MODE);
+document.documentElement.classList.toggle("hosted-mode", HOSTED_MODE);
 
-setWidgetOpen(true);
+if (HOSTED_MODE) {
+  window.addEventListener("resize", scheduleHostLayoutUpdate);
+}
+
+setWidgetOpen(DEFAULT_OPEN);
+updateFeedbackSubmitState();
 checkHealth();
 
 launcherButton?.addEventListener("click", () => {
@@ -42,6 +52,7 @@ launcherButton?.addEventListener("click", () => {
 
 collapseButton?.addEventListener("click", () => {
   setWidgetOpen(false);
+  notifyHostClose();
 });
 
 endChatButton?.addEventListener("click", () => {
@@ -49,7 +60,7 @@ endChatButton?.addEventListener("click", () => {
 });
 
 closeFeedbackButton?.addEventListener("click", closeFeedback);
-skipFeedbackButton?.addEventListener("click", closeFeedback);
+skipFeedbackButton?.addEventListener("click", endChatSession);
 feedbackBackdrop?.addEventListener("click", closeFeedback);
 
 feedbackChoices.forEach((button) => {
@@ -61,24 +72,16 @@ feedbackChoices.forEach((button) => {
     });
 
     button.classList.add("selected");
+    updateFeedbackSubmitState();
   });
 });
 
 submitFeedbackButton?.addEventListener("click", () => {
-  const summary = selectedRating
-    ? `Thanks for the ${selectedRating} feedback.`
-    : "Thanks for your feedback.";
+  if (!selectedRating) {
+    return;
+  }
 
-  const detail = feedbackInput?.value.trim() ?? "";
-
-  appendMessage(
-    "bot",
-    detail
-      ? `${summary} Your comment has been noted.`
-      : summary
-  );
-
-  closeFeedback();
+  endChatSession();
 });
 
 chatForm?.addEventListener("submit", async (event) => {
@@ -183,14 +186,6 @@ function appendMessage(
     note.textContent = String(meta.notice);
 
     bubble.appendChild(note);
-  }
-
-  if (
-    role === "bot" &&
-    Array.isArray(sources) &&
-    sources.length > 0
-  ) {
-    bubble.appendChild(createSourcesBlock(sources));
   }
 
   article.appendChild(bubble);
@@ -417,7 +412,7 @@ function createSourcesBlock(sources) {
 
   const title = document.createElement("strong");
   title.className = "sources-title";
-  title.textContent = "Sources";
+  title.textContent = "Reference";
 
   sourceBlock.appendChild(title);
 
@@ -486,9 +481,76 @@ function createFeedbackBar() {
   return wrapper;
 }
 
+function scheduleHostLayoutUpdate() {
+  if (!HOSTED_MODE) {
+    return;
+  }
+
+  window.requestAnimationFrame(() => {
+    notifyHostLayout();
+  });
+}
+
+function notifyHostLayout() {
+  if (!HOSTED_MODE || window.parent === window) {
+    return;
+  }
+
+  const isOpen = !(chatWidget?.classList.contains("hidden") ?? true);
+  const activeElement = isOpen ? chatWidget : launcherButton;
+  const bounds = activeElement?.getBoundingClientRect();
+
+  if (!bounds) {
+    return;
+  }
+
+  window.parent.postMessage(
+    {
+      type: "pcl-gpt:layout",
+      isOpen,
+      width: Math.ceil(bounds.width),
+      height: Math.ceil(bounds.height),
+    },
+    runtimeConfig.parentOrigin || "*"
+  );
+}
+
+function notifyHostClose() {
+  if (window.parent === window) {
+    return;
+  }
+
+  window.parent.postMessage(
+    {
+      type: "pcl-gpt:close",
+    },
+    runtimeConfig.parentOrigin || "*"
+  );
+}
+
 function getRuntimeConfig() {
   const params = new URLSearchParams(
     window.location.search
+  );
+
+  const surface =
+    params.get("surface") ||
+    document.body.dataset.surface ||
+    "";
+
+  const hostedMode =
+    surface.toLowerCase() === "sharepoint";
+
+  const embedMode =
+    params.get("embed") === "1" ||
+    (
+      !hostedMode &&
+      document.body.dataset.embed === "true"
+    );
+
+  const explicitOpen = parseBooleanFlag(
+    params.get("open") ||
+      document.body.dataset.open
   );
 
   const apiBaseCandidate =
@@ -499,10 +561,19 @@ function getRuntimeConfig() {
 
   return {
     apiBaseUrl: normalizeApiBase(apiBaseCandidate),
-
-    embedMode:
-      params.get("embed") === "1" ||
-      document.body.dataset.embed === "true",
+    embedMode,
+    hostedMode,
+    parentOrigin:
+      String(
+        params.get("parentOrigin") ||
+          document.body.dataset.parentOrigin ||
+          ""
+      ).trim(),
+    defaultOpen: resolveDefaultOpen(
+      explicitOpen,
+      embedMode,
+      hostedMode
+    ),
   };
 }
 
@@ -512,6 +583,56 @@ function normalizeApiBase(value) {
   ).trim();
 
   return normalized.replace(/\/+$/, "");
+}
+
+function parseBooleanFlag(value) {
+  if (value == null) {
+    return undefined;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+
+  if (!normalized) {
+    return undefined;
+  }
+
+  if (
+    normalized === "1" ||
+    normalized === "true" ||
+    normalized === "yes"
+  ) {
+    return true;
+  }
+
+  if (
+    normalized === "0" ||
+    normalized === "false" ||
+    normalized === "no"
+  ) {
+    return false;
+  }
+
+  return undefined;
+}
+
+function resolveDefaultOpen(
+  explicitOpen,
+  embedMode,
+  hostedMode
+) {
+  if (typeof explicitOpen === "boolean") {
+    return explicitOpen;
+  }
+
+  if (embedMode) {
+    return true;
+  }
+
+  if (hostedMode) {
+    return false;
+  }
+
+  return true;
 }
 
 function handleComposerKeydown(event) {
@@ -610,11 +731,14 @@ function setWidgetOpen(isOpen) {
   if (isOpen) {
     messageInput?.focus();
   }
+
+  scheduleHostLayoutUpdate();
 }
 
 function openFeedback() {
   feedbackModal?.classList.remove("hidden");
   feedbackBackdrop?.classList.remove("hidden");
+  updateFeedbackSubmitState();
 }
 
 function closeFeedback() {
@@ -630,6 +754,39 @@ function closeFeedback() {
   feedbackChoices.forEach((item) => {
     item.classList.remove("selected");
   });
+
+  updateFeedbackSubmitState();
+}
+
+function endChatSession() {
+  closeFeedback();
+  resetChatSession();
+  setWidgetOpen(false);
+  notifyHostClose();
+}
+
+function resetChatSession() {
+  if (messages) {
+    messages.replaceChildren();
+  }
+
+  if (messageInput) {
+    messageInput.value = "";
+    autoResizeTextarea();
+  }
+
+  setComposerState(false);
+}
+
+function updateFeedbackSubmitState() {
+  if (!submitFeedbackButton) {
+    return;
+  }
+
+  const hasRating = Boolean(selectedRating);
+
+  submitFeedbackButton.disabled = !hasRating;
+  submitFeedbackButton.classList.toggle("ready", hasRating);
 }
 
 function autoResizeTextarea() {

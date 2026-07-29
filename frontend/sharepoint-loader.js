@@ -18,7 +18,7 @@
 
     if (!rawEmbedUrl) {
       console.error(
-        "PCL GPT loader requires data-embed-url or window.PCL_GPT_EMBED_URL."
+        "One Bot loader requires data-embed-url or window.PCL_GPT_EMBED_URL."
       );
       return;
     }
@@ -115,7 +115,7 @@
     launcher.className = "pcl-gpt-launcher";
     launcher.setAttribute("aria-expanded", String(defaultOpen));
     launcher.innerHTML = `
-      <span>PCL GPT</span>
+      <span>One Bot</span>
       <span class="pcl-gpt-launcher-dot" aria-hidden="true"></span>
     `;
 
@@ -124,7 +124,7 @@
 
     const frame = document.createElement("iframe");
     frame.className = "pcl-gpt-frame";
-    frame.title = "PCL GPT";
+    frame.title = "One Bot";
     frame.src = embedUrl;
 
     panel.appendChild(frame);
