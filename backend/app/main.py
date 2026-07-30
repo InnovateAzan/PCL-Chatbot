@@ -1,7 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.app.api.routes.chat import chatbot, router as chat_router
+from backend.app.api.routes.chat import (
+    get_chatbot,
+    router as chat_router,
+)
 from backend.app.api.routes.policies import router as policies_router
 from backend.app.core.config import get_settings
 
@@ -29,7 +32,7 @@ def health_check() -> dict[str, str | bool]:
         "environment": settings.environment,
         "mode": "starter-scaffold",
     }
-    payload.update(chatbot.health_snapshot())
+    payload.update(get_chatbot().health_snapshot())
     return payload
 
 

@@ -51,6 +51,7 @@ class PolicyRetriever:
     """
 
     COLLECTION_NAME = "pakistan_cables_policies"
+    INDEX_FORMAT_VERSION = 2
 
     PAGE_PATTERN = re.compile(
         r"\[Page\s+(\d+)(?:\s*\|\s*[^\]]+)?\]",
@@ -358,10 +359,16 @@ class PolicyRetriever:
                 manifest.get(absolute_path, {})
                 .get("file_hash")
             )
+            previous_index_version = (
+                manifest.get(absolute_path, {})
+                .get("index_format_version")
+            )
 
             if (
                 not force
                 and previous_hash == file_hash
+                and previous_index_version
+                == self.INDEX_FORMAT_VERSION
             ):
                 skipped_count += 1
                 continue
@@ -409,6 +416,9 @@ class PolicyRetriever:
                 "file_hash": file_hash,
                 "document_name": (
                     loaded_document.file_name
+                ),
+                "index_format_version": (
+                    self.INDEX_FORMAT_VERSION
                 ),
                 "chunk_count": len(chunks),
             }

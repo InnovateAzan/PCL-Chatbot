@@ -3,6 +3,9 @@ from __future__ import annotations
 import csv
 import mimetypes
 import re
+import shutil
+import subprocess
+import tempfile
 import traceback
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -521,6 +524,11 @@ class DocumentLoader:
                 "Run: pip install python-docx"
             )
 
+        rendered_text = self._load_word_as_paginated_pdf(path)
+
+        if rendered_text:
+            return rendered_text
+
         document = Document(str(path))
         content: list[str] = []
 
@@ -578,6 +586,130 @@ class DocumentLoader:
                 )
 
         return "\n".join(content)
+
+    def _load_word_as_paginated_pdf(
+        self,
+        path: Path,
+    ) -> str | None:
+        temp_dir = Path(
+            tempfile.mkdtemp(prefix="pcl-word-pages-")
+        )
+        pdf_path = temp_dir / f"{path.stem}.pdf"
+
+        try:
+            converted = (
+                self._convert_word_to_pdf_with_word(path, pdf_path)
+                or self._convert_word_to_pdf_with_libreoffice(
+                    path,
+                    temp_dir,
+                )
+            )
+
+            if not converted or not pdf_path.exists():
+                return None
+
+            paginated_text = self._load_pdf(pdf_path).strip()
+
+            return paginated_text or None
+
+        except Exception:
+            return None
+
+        finally:
+            shutil.rmtree(
+                temp_dir,
+                ignore_errors=True,
+            )
+
+    def _convert_word_to_pdf_with_word(
+        self,
+        source_path: Path,
+        pdf_path: Path,
+    ) -> bool:
+        powershell = shutil.which("powershell")
+
+        if not powershell:
+            return False
+
+        source_literal = str(source_path).replace(
+            "'",
+            "''",
+        )
+        pdf_literal = str(pdf_path).replace(
+            "'",
+            "''",
+        )
+
+        script = "\n".join(
+            [
+                "$ErrorActionPreference = 'Stop'",
+                "$word = $null",
+                "$document = $null",
+                "try {",
+                "  $word = New-Object -ComObject Word.Application",
+                "  $word.Visible = $false",
+                "  $document = $word.Documents.Open("
+                f"'{source_literal}', $false, $true)",
+                "  $document.SaveAs("
+                f"'{pdf_literal}', 17)",
+                "} finally {",
+                "  if ($document) { $document.Close($false) }",
+                "  if ($word) { $word.Quit() }",
+                "}",
+            ]
+        )
+
+        result = subprocess.run(
+            [
+                powershell,
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                script,
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+
+        return (
+            result.returncode == 0
+            and pdf_path.exists()
+        )
+
+    def _convert_word_to_pdf_with_libreoffice(
+        self,
+        source_path: Path,
+        output_dir: Path,
+    ) -> bool:
+        soffice = shutil.which("soffice")
+
+        if not soffice:
+            return False
+
+        result = subprocess.run(
+            [
+                soffice,
+                "--headless",
+                "--convert-to",
+                "pdf",
+                "--outdir",
+                str(output_dir),
+                str(source_path),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=120,
+            check=False,
+        )
+
+        expected_pdf = output_dir / f"{source_path.stem}.pdf"
+
+        return (
+            result.returncode == 0
+            and expected_pdf.exists()
+        )
 
     # ---------------------------------------------------------
     # Excel

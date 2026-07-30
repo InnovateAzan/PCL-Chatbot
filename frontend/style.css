@@ -916,8 +916,16 @@ body.embed-mode .feedback-modal::-webkit-scrollbar {
   font-weight: 700;
 }
 
+.source-list {
+  margin: 0;
+  padding-left: 18px;
+}
+
 .source-item {
-  margin: 0 0 10px;
+  margin: 0 0 8px;
+  color: #756e79;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .source-item:last-child {
@@ -943,6 +951,10 @@ body.embed-mode .feedback-modal::-webkit-scrollbar {
   }
 
   .answer-bullet-list {
+    padding-left: 20px;
+  }
+
+  .source-list {
     padding-left: 20px;
   }
 }

@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from backend.app.core.config import get_settings
 from backend.app.services.document_loader import PolicyDocumentLoader
+from backend.app.services.retriever import PolicyRetriever
 
 router = APIRouter(tags=["policies"])
 
@@ -13,7 +14,10 @@ def list_policies() -> dict[str, list[dict[str, str]]]:
 
 
 @router.post("/policies/reindex", status_code=202)
-def reindex_policies() -> dict[str, str]:
+def reindex_policies() -> dict[str, object]:
+    retriever = PolicyRetriever()
+    summary = retriever.rebuild_index()
     return {
-        "message": "Reindex job placeholder created. Replace this with a real indexing pipeline.",
+        "message": "Policy index rebuilt successfully.",
+        "summary": summary,
     }

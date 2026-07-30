@@ -3,6 +3,7 @@ import { BaseApplicationCustomizer } from "@microsoft/sp-application-base";
 export interface IPclGptApplicationCustomizerProperties {
   enabled?: boolean;
   chatbotUrl?: string;
+  apiBaseUrl?: string;
   oneDeskPath?: string;
 }
 
@@ -278,6 +279,9 @@ export default class PclGptApplicationCustomizer
     const rawChatbotUrl =
       this.properties.chatbotUrl ||
       "http://127.0.0.1:5500/?embed=1";
+    const apiBaseUrl =
+      this.properties.apiBaseUrl ||
+      "http://127.0.0.1:8085/api";
 
     try {
       const url = new URL(
@@ -286,6 +290,11 @@ export default class PclGptApplicationCustomizer
       );
 
       url.searchParams.set("embed", "1");
+      url.searchParams.set("apiBase", apiBaseUrl);
+      url.searchParams.set(
+        "parentOrigin",
+        window.location.origin
+      );
 
       return url.toString();
     } catch {
@@ -294,7 +303,11 @@ export default class PclGptApplicationCustomizer
           ? "&"
           : "?";
 
-      return `${rawChatbotUrl}${separator}embed=1`;
+      return (
+        `${rawChatbotUrl}${separator}embed=1`
+        + `&apiBase=${encodeURIComponent(apiBaseUrl)}`
+        + `&parentOrigin=${encodeURIComponent(window.location.origin)}`
+      );
     }
   }
 

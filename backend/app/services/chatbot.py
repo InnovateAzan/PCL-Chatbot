@@ -27,7 +27,7 @@ class PolicyChatbot:
         retriever: PolicyRetriever | None = None,
     ) -> None:
         self.settings = get_settings()
-        self.retriever = retriever or PolicyRetriever()
+        self.retriever = retriever
         self.gemini_client = self._build_gemini_client()
 
     def answer(self, message: str) -> ChatResponse:
@@ -51,6 +51,7 @@ class PolicyChatbot:
                 provider="local-greeting",
             )
 
+        retriever = self._get_retriever()
         sources = self.retriever.search(message)
 
         if not sources:
@@ -94,7 +95,16 @@ class PolicyChatbot:
                 else "policy-fallback"
             ),
             "gemini_configured": bool(self.gemini_client),
+            "retriever_ready": bool(self.retriever),
         }
+
+    def _get_retriever(self) -> PolicyRetriever:
+        if self.retriever is None:
+            self.retriever = PolicyRetriever(
+                auto_index=False
+            )
+
+        return self.retriever
 
     def _build_general_response(
         self,
@@ -377,9 +387,33 @@ class PolicyChatbot:
 
         for source in sources:
             name = source.document_name.strip()
+            cleaned_name = re.sub(
+                r"\.[^.]+$",
+                "",
+                name,
+            )
+            cleaned_name = re.sub(
+                r"^\d+\s*-\s*PCL\s*-\s*",
+                "",
+                cleaned_name,
+                flags=re.IGNORECASE,
+            )
+            cleaned_name = re.sub(
+                r"^PCL\s*-\s*",
+                "",
+                cleaned_name,
+                flags=re.IGNORECASE,
+            ).strip()
 
-            if name and name not in document_names:
-                document_names.append(name)
+            page_suffix = (
+                f" (Page {source.page_number})"
+                if source.page_number
+                else ""
+            )
+            label = f"{cleaned_name}{page_suffix}" if cleaned_name else name
+
+            if label and label not in document_names:
+                document_names.append(label)
 
             if len(document_names) >= 3:
                 break
@@ -387,11 +421,7 @@ class PolicyChatbot:
         if not document_names:
             return "Sources: PCL policy knowledge base."
 
-        return (
-            "Sources: PCL policy - "
-            + "; ".join(document_names)
-            + "."
-        )
+        return "Sources: " + "; ".join(document_names) + "."
 
     def _handle_gemini_error(
         self,

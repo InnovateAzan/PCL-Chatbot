@@ -139,10 +139,23 @@ chatForm?.addEventListener("submit", async (event) => {
     );
   } catch (error) {
     console.error("Chat request error:", error);
+    const errorText = String(
+      error?.message || ""
+    ).trim();
+    const fallbackMessage = HOSTED_MODE
+      ? (
+        `The assistant could not complete the request. `
+        + `Backend: ${API_BASE_URL}. `
+        + `Reason: ${errorText || "Unknown error."}`
+      )
+      : (
+        "The assistant could not reach the backend. "
+        + "Please make sure the API server is running."
+      );
 
     appendMessage(
       "bot",
-      "The assistant could not reach the backend. Please make sure the API server is running."
+      fallbackMessage
     );
   } finally {
     setComposerState(false);
@@ -180,10 +193,15 @@ function appendMessage(
 
   bubble.appendChild(body);
 
-  if (role === "bot" && meta.notice) {
+  const formattedNotice = buildSourcesNotice(
+    sources,
+    meta.notice,
+  );
+
+  if (role === "bot" && formattedNotice) {
     const note = document.createElement("p");
     note.className = "message-note";
-    note.textContent = String(meta.notice);
+    note.textContent = formattedNotice;
 
     bubble.appendChild(note);
   }
@@ -406,47 +424,44 @@ function normalizeAssistantAnswer(answer) {
   return text.trim();
 }
 
-function createSourcesBlock(sources) {
-  const sourceBlock = document.createElement("div");
-  sourceBlock.className = "sources";
+function formatSourceLabel(source) {
+  const rawName = String(source?.document_name || "Unknown policy");
+  const policyName = rawName
+    .replace(/\.[^.]+$/i, "")
+    .replace(/^\d+\s*-\s*PCL\s*-\s*/i, "")
+    .replace(/^PCL\s*-\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
 
-  const title = document.createElement("strong");
-  title.className = "sources-title";
-  title.textContent = "Reference";
+  if (source?.page_number) {
+    return `${policyName} (Page ${source.page_number})`;
+  }
 
-  sourceBlock.appendChild(title);
+  return policyName;
+}
 
-  sources.forEach((source) => {
-    const wrapper = document.createElement("div");
-    wrapper.className = "source-item";
+function buildSourcesNotice(sources, fallbackNotice) {
+  if (Array.isArray(sources) && sources.length > 0) {
+    const uniqueLabels = [];
 
-    const line = document.createElement("p");
+    sources.forEach((source) => {
+      const label = formatSourceLabel(source);
 
-    const section = source.section
-      ? `, ${source.section}`
-      : "";
+      if (label && !uniqueLabels.includes(label)) {
+        uniqueLabels.push(label);
+      }
+    });
 
-    const page = source.page_number
-      ? `, page ${source.page_number}`
-      : "";
-
-    line.textContent =
-      `${source.document_name || "Unknown document"}${section}${page}`;
-
-    wrapper.appendChild(line);
-
-    if (source.snippet) {
-      const snippet = document.createElement("p");
-      snippet.className = "source-snippet";
-      snippet.textContent = source.snippet;
-
-      wrapper.appendChild(snippet);
+    if (uniqueLabels.length > 0) {
+      return `Sources: ${uniqueLabels.join("; ")}.`;
     }
+  }
 
-    sourceBlock.appendChild(wrapper);
-  });
+  if (fallbackNotice) {
+    return String(fallbackNotice);
+  }
 
-  return sourceBlock;
+  return "";
 }
 
 function createFeedbackBar() {
