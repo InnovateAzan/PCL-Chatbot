@@ -1,6 +1,8 @@
 import { BaseApplicationCustomizer } from "@microsoft/sp-application-base";
 
 const WIDGET_VERSION = "onedesk-assistant-v2";
+const DEFAULT_CHATBOT_URL = "http://127.0.0.1:5500/?embed=1";
+const DEFAULT_API_BASE_URL = "http://127.0.0.1:8085/api";
 
 export interface IPclGptApplicationCustomizerProperties {
   enabled?: boolean;
@@ -280,10 +282,12 @@ export default class PclGptApplicationCustomizer
   private getChatbotUrl(): string {
     const rawChatbotUrl =
       this.properties.chatbotUrl ||
-      "http://127.0.0.1:5500/?embed=1";
+      DEFAULT_CHATBOT_URL;
     const apiBaseUrl =
       this.properties.apiBaseUrl ||
-      "http://127.0.0.1:8085/api";
+      DEFAULT_API_BASE_URL;
+
+    this.warnIfInsecureApiBase(apiBaseUrl);
 
     try {
       const url = new URL(
@@ -361,6 +365,18 @@ export default class PclGptApplicationCustomizer
       ).toString();
     } catch {
       return "http://127.0.0.1:5500/assets/pcl-logo.png";
+    }
+  }
+
+  private warnIfInsecureApiBase(apiBaseUrl: string): void {
+    if (
+      window.location.protocol === "https:" &&
+      apiBaseUrl.indexOf("https://") !== 0
+    ) {
+      console.warn(
+        "OneDesk Assistant apiBaseUrl should be an HTTPS tunnel URL for SharePoint testing.",
+        apiBaseUrl
+      );
     }
   }
 

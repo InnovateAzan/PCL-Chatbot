@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     frontend_origin: str = "http://127.0.0.1:5500"
     sharepoint_origin: str = "https://pakistancable.sharepoint.com"
     additional_allowed_origins: str = ""
+    temporary_tunnel_url: str = ""
+    public_api_base_url: str = ""
     database_url: str = ""
     db_pool_size: int = 5
     db_max_overflow: int = 10
@@ -100,6 +102,8 @@ class Settings(BaseSettings):
             *self.frontend_origins.split(","),
             self.frontend_origin,
             self.sharepoint_origin,
+            _origin_from_url(self.temporary_tunnel_url),
+            _origin_from_url(self.public_api_base_url),
             *self.additional_allowed_origins.split(","),
         ]:
             origin = candidate.strip().rstrip("/")
@@ -164,3 +168,15 @@ def _quote_database_credentials(database_url: str) -> str:
             parts.fragment,
         )
     )
+
+
+def _origin_from_url(value: str) -> str:
+    raw_value = (value or "").strip()
+    if not raw_value:
+        return ""
+
+    parts = urlsplit(raw_value)
+    if not parts.scheme or not parts.netloc:
+        return raw_value
+
+    return urlunsplit((parts.scheme, parts.netloc, "", "", ""))

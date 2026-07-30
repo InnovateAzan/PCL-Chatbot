@@ -131,6 +131,64 @@ select * from unanswered_questions order by id desc limit 20;
 If PostgreSQL is unavailable or a write fails, OneDesk Assistant logs the error
 and still returns the chatbot answer.
 
+## Temporary Cloudflare Quick Tunnel
+
+Use this only for temporary testing from SharePoint. Do not commit real tunnel
+URLs, Gemini keys, or database credentials.
+
+1. Install Cloudflare Tunnel:
+
+   ```powershell
+   winget install --id Cloudflare.cloudflared
+   ```
+
+2. Open PowerShell terminal 1 and start FastAPI:
+
+   ```powershell
+   .\scripts\start-api.ps1
+   ```
+
+3. Open PowerShell terminal 2 and start a Quick Tunnel:
+
+   ```powershell
+   .\scripts\start-cloudflared-tunnel.ps1
+   ```
+
+4. Copy the generated `https://*.trycloudflare.com` URL.
+
+5. In `.env`, set only the temporary public URL values:
+
+   ```env
+   TEMPORARY_TUNNEL_URL=https://YOUR-TUNNEL.trycloudflare.com
+   PUBLIC_API_BASE_URL=https://YOUR-TUNNEL.trycloudflare.com/api
+   ```
+
+6. Restart FastAPI after editing `.env`.
+
+7. Update [frontend/config.js](/D:/PROJECT/Chart%20Bot/frontend/config.js):
+
+   ```javascript
+   window.PCL_GPT_CONFIG = {
+     ...(window.PCL_GPT_CONFIG || {}),
+     apiBaseUrl: "https://YOUR-TUNNEL.trycloudflare.com/api",
+   };
+   ```
+
+8. For SPFx debug, update `apiBaseUrl` in
+   [sharepoint-spfx/config/serve.json](/D:/PROJECT/Chart%20Bot/sharepoint-spfx/config/serve.json)
+   to the same `https://YOUR-TUNNEL.trycloudflare.com/api` value.
+
+9. Test the public health endpoint:
+
+   ```powershell
+   Invoke-WebRequest https://YOUR-TUNNEL.trycloudflare.com/api/health
+   ```
+
+10. Run the SharePoint debug page with the existing SPFx local serve flow.
+
+When the temporary test is finished, stop both PowerShell windows and remove the
+tunnel URL from `.env`, `frontend/config.js`, and `sharepoint-spfx/config/serve.json`.
+
 ## SharePoint note
 
 For One Desk integration, use:
