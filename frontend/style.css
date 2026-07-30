@@ -355,6 +355,14 @@ body.embed-mode .chat-widget.hidden {
   font-size: 1.08rem;
 }
 
+.widget-tagline {
+  margin: 3px 0 0;
+  color: #0b8a3e;
+  font-size: 0.78rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
 .widget-subtitle {
   margin: 4px 0 0;
   color: var(--widget-muted);
@@ -509,6 +517,107 @@ body.embed-mode .messages:empty {
   align-items: center;
   gap: 10px;
   margin-top: 14px;
+}
+
+.feedback-bar.saving {
+  opacity: 0.72;
+}
+
+.feedback-bar.saved .feedback-toggle.selected {
+  outline: 2px solid rgba(11, 138, 62, 0.32);
+}
+
+.feedback-bar.error .feedback-toggle.selected {
+  outline: 2px solid rgba(180, 34, 34, 0.34);
+}
+
+.admin-shell {
+  width: min(1180px, calc(100% - 32px));
+  margin: 0 auto;
+  padding: 28px 0 48px;
+}
+
+.admin-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 22px;
+}
+
+.admin-header h1 {
+  margin: 0;
+  font-size: 1.8rem;
+}
+
+.admin-header p {
+  margin: 6px 0 0;
+  color: #5d6b63;
+}
+
+.admin-kpi-grid,
+.admin-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.admin-kpi,
+.admin-grid article,
+.admin-table-section {
+  background: #ffffff;
+  border: 1px solid rgba(20, 36, 27, 0.12);
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.admin-kpi span {
+  display: block;
+  color: #5d6b63;
+  font-size: 0.85rem;
+}
+
+.admin-kpi strong {
+  display: block;
+  margin-top: 8px;
+  color: #12351f;
+  font-size: 1.8rem;
+}
+
+.admin-grid {
+  margin-top: 14px;
+}
+
+.admin-grid h2,
+.admin-table-section h2 {
+  margin: 0 0 12px;
+  font-size: 1rem;
+}
+
+.admin-list p {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0;
+  padding: 8px 0;
+  border-top: 1px solid rgba(20, 36, 27, 0.08);
+}
+
+.admin-table-section {
+  margin-top: 14px;
+  overflow-x: auto;
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.admin-table th,
+.admin-table td {
+  padding: 10px;
+  border-top: 1px solid rgba(20, 36, 27, 0.1);
+  text-align: left;
+  vertical-align: top;
 }
 
 .feedback-toggle {

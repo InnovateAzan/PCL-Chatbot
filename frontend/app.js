@@ -1,10 +1,12 @@
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8085/api";
+const LOCAL_PROFILE_STORAGE_KEY = "oneassist.localProfile";
 
 const runtimeConfig = getRuntimeConfig();
 const API_BASE_URL = runtimeConfig.apiBaseUrl;
 const EMBED_MODE = runtimeConfig.embedMode;
 const HOSTED_MODE = runtimeConfig.hostedMode;
 const DEFAULT_OPEN = runtimeConfig.defaultOpen;
+const ENABLE_HISTORY_PANEL = runtimeConfig.enableHistoryPanel;
 
 const chatForm = document.getElementById("chatForm");
 const sendButton = document.getElementById("sendButton");
@@ -31,6 +33,9 @@ const feedbackInput = document.getElementById("feedbackInput");
 const feedbackChoices = document.querySelectorAll(".feedback-choice");
 
 let selectedRating = "";
+let currentUser = null;
+let currentSessionId = "";
+let initializingUserPromise = null;
 
 document.body.classList.toggle("embed-mode", EMBED_MODE);
 document.body.classList.toggle("hosted-mode", HOSTED_MODE);
@@ -44,6 +49,9 @@ if (HOSTED_MODE) {
 setWidgetOpen(DEFAULT_OPEN);
 updateFeedbackSubmitState();
 checkHealth();
+initializeCurrentUser().catch((error) => {
+  console.error("User initialization error:", error);
+});
 
 launcherButton?.addEventListener("click", () => {
   const willOpen = chatWidget?.classList.contains("hidden") ?? true;
@@ -100,13 +108,31 @@ chatForm?.addEventListener("submit", async (event) => {
   setComposerState(true);
 
   try {
+    let user = null;
+    let sessionId = "";
+    let historyEnabled = false;
+
+    try {
+      user = await initializeCurrentUser();
+      sessionId = await ensureChatSession(user);
+      historyEnabled = Boolean(user?.userId && sessionId);
+    } catch (historyError) {
+      console.warn("Chat history unavailable; sending stateless chat.", historyError);
+    }
+
     const response = await fetch(`${API_BASE_URL}/chat`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...(historyEnabled
+          ? { "X-OneAssist-User-Id": String(user.userId) }
+          : {}),
       },
       body: JSON.stringify({
         message,
+        ...(historyEnabled ? { sessionId } : {}),
+        displayName: runtimeConfig.userProfile.displayName,
+        preferredName: runtimeConfig.userProfile.preferredName,
       }),
     });
 
@@ -134,7 +160,8 @@ chatForm?.addEventListener("submit", async (event) => {
       payload.sources ?? [],
       {
         notice: payload.notice,
-        enableFeedback: true,
+        enableFeedback: Boolean(payload.assistantMessageId),
+        assistantMessageId: payload.assistantMessageId,
       }
     );
   } catch (error) {
@@ -209,7 +236,7 @@ function appendMessage(
   article.appendChild(bubble);
 
   if (role === "bot" && meta.enableFeedback) {
-    article.appendChild(createFeedbackBar());
+    article.appendChild(createFeedbackBar(meta.assistantMessageId));
   }
 
   messages.appendChild(article);
@@ -425,7 +452,11 @@ function normalizeAssistantAnswer(answer) {
 }
 
 function formatSourceLabel(source) {
-  const rawName = String(source?.document_name || "Unknown policy");
+  const rawName = String(
+    source?.document_name ||
+    source?.documentName ||
+    "Unknown policy"
+  );
   const policyName = rawName
     .replace(/\.[^.]+$/i, "")
     .replace(/^\d+\s*-\s*PCL\s*-\s*/i, "")
@@ -433,11 +464,18 @@ function formatSourceLabel(source) {
     .replace(/\s+/g, " ")
     .trim();
 
-  if (source?.page_number) {
-    return `${policyName} (Page ${source.page_number})`;
+  const pageNumber = source?.page_number ?? source?.pageNumber;
+  const section = source?.section ?? source?.sectionName;
+
+  if (pageNumber) {
+    return `${policyName} (Page ${pageNumber})`;
   }
 
-  return policyName;
+  if (section) {
+    return `${policyName} (Page not indexed; ${section})`;
+  }
+
+  return `${policyName} (Page not indexed)`;
 }
 
 function buildSourcesNotice(sources, fallbackNotice) {
@@ -464,7 +502,7 @@ function buildSourcesNotice(sources, fallbackNotice) {
   return "";
 }
 
-function createFeedbackBar() {
+function createFeedbackBar(assistantMessageId) {
   const wrapper = document.createElement("div");
   wrapper.className = "feedback-bar";
 
@@ -480,20 +518,74 @@ function createFeedbackBar() {
   down.setAttribute("aria-label", "Unhelpful response");
   down.innerHTML = "&#128078;";
 
-  up.addEventListener("click", () => {
-    up.classList.toggle("selected");
+  up.addEventListener("click", async () => {
+    up.classList.add("selected");
     down.classList.remove("selected");
+    await submitMessageFeedback(
+      assistantMessageId,
+      5,
+      "HELPFUL",
+      wrapper
+    );
   });
 
-  down.addEventListener("click", () => {
-    down.classList.toggle("selected");
+  down.addEventListener("click", async () => {
+    down.classList.add("selected");
     up.classList.remove("selected");
+    await submitMessageFeedback(
+      assistantMessageId,
+      1,
+      "NOT_HELPFUL",
+      wrapper
+    );
   });
 
   wrapper.appendChild(up);
   wrapper.appendChild(down);
 
   return wrapper;
+}
+
+async function submitMessageFeedback(
+  assistantMessageId,
+  rating,
+  feedbackType,
+  wrapper
+) {
+  if (!assistantMessageId || !currentUser) {
+    return;
+  }
+
+  wrapper.classList.remove("error");
+  wrapper.classList.add("saving");
+
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/messages/${assistantMessageId}/feedback`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-OneAssist-User-Id": String(currentUser.userId),
+        },
+        body: JSON.stringify({
+          rating,
+          feedbackType,
+        }),
+      }
+    );
+
+    if (!response.ok) {
+      throw new Error("Feedback could not be saved.");
+    }
+
+    wrapper.classList.add("saved");
+  } catch (error) {
+    console.error("Feedback error:", error);
+    wrapper.classList.add("error");
+  } finally {
+    wrapper.classList.remove("saving");
+  }
 }
 
 function scheduleHostLayoutUpdate() {
@@ -578,6 +670,12 @@ function getRuntimeConfig() {
     apiBaseUrl: normalizeApiBase(apiBaseCandidate),
     embedMode,
     hostedMode,
+    enableHistoryPanel: parseBooleanFlag(
+      params.get("enableHistory") ||
+        document.body.dataset.enableHistory ||
+        window.PCL_GPT_CONFIG?.enableHistory
+    ) === true,
+    userProfile: buildUserProfile(params),
     parentOrigin:
       String(
         params.get("parentOrigin") ||
@@ -590,6 +688,73 @@ function getRuntimeConfig() {
       hostedMode
     ),
   };
+}
+
+function buildUserProfile(params) {
+  const configProfile = window.PCL_GPT_CONFIG?.userProfile || {};
+  const savedProfile = readLocalProfile();
+
+  const profile = {
+    displayName:
+      params.get("displayName") ||
+      configProfile.displayName ||
+      savedProfile.displayName ||
+      "Local OneAssist User",
+    preferredName:
+      params.get("preferredName") ||
+      configProfile.preferredName ||
+      savedProfile.preferredName ||
+      "",
+    email:
+      params.get("email") ||
+      configProfile.email ||
+      savedProfile.email ||
+      "local.oneassist.user@example.com",
+    employeeId:
+      params.get("employeeId") ||
+      configProfile.employeeId ||
+      savedProfile.employeeId ||
+      "",
+    department:
+      params.get("department") ||
+      configProfile.department ||
+      savedProfile.department ||
+      "",
+    jobTitle:
+      params.get("jobTitle") ||
+      configProfile.jobTitle ||
+      savedProfile.jobTitle ||
+      "",
+    entraObjectId:
+      params.get("entraObjectId") ||
+      configProfile.entraObjectId ||
+      savedProfile.entraObjectId ||
+      "",
+  };
+
+  writeLocalProfile(profile);
+  return profile;
+}
+
+function readLocalProfile() {
+  try {
+    return JSON.parse(
+      window.localStorage.getItem(LOCAL_PROFILE_STORAGE_KEY) || "{}"
+    );
+  } catch {
+    return {};
+  }
+}
+
+function writeLocalProfile(profile) {
+  try {
+    window.localStorage.setItem(
+      LOCAL_PROFILE_STORAGE_KEY,
+      JSON.stringify(profile)
+    );
+  } catch {
+    // Local storage can be disabled in embedded browser contexts.
+  }
 }
 
 function normalizeApiBase(value) {
@@ -699,7 +864,10 @@ async function checkHealth() {
     const payload = await response.json();
 
     statusNote.textContent =
-      payload.gemini_configured
+      (
+        payload.gemini_configured ||
+        payload.details?.gemini_configured
+      )
         ? "Live Gemini is configured for richer responses."
         : "Policy fallback mode is active until a Gemini API key is added.";
   } catch (error) {
@@ -711,6 +879,66 @@ async function checkHealth() {
     statusNote.textContent =
       "Backend is offline. Start the local API to activate the assistant.";
   }
+}
+
+async function initializeCurrentUser() {
+  if (currentUser) {
+    return currentUser;
+  }
+
+  if (initializingUserPromise) {
+    return initializingUserPromise;
+  }
+
+  initializingUserPromise = fetch(`${API_BASE_URL}/users/initialize`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(runtimeConfig.userProfile),
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        throw new Error("User initialization failed.");
+      }
+
+      currentUser = await response.json();
+      return currentUser;
+    })
+    .catch((error) => {
+      initializingUserPromise = null;
+      throw error;
+    });
+
+  return initializingUserPromise;
+}
+
+async function ensureChatSession(user) {
+  if (currentSessionId) {
+    return currentSessionId;
+  }
+
+  const response = await fetch(`${API_BASE_URL}/chat/sessions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-OneAssist-User-Id": String(user.userId),
+    },
+    body: JSON.stringify({}),
+  });
+
+  if (!response.ok) {
+    throw new Error("Chat session could not be created.");
+  }
+
+  const payload = await response.json();
+  currentSessionId = payload.sessionId || "";
+
+  if (!currentSessionId) {
+    throw new Error("Chat session response did not include a session ID.");
+  }
+
+  return currentSessionId;
 }
 
 function setComposerState(isLoading) {
@@ -773,11 +1001,31 @@ function closeFeedback() {
   updateFeedbackSubmitState();
 }
 
-function endChatSession() {
+async function endChatSession() {
+  await endCurrentBackendSession();
   closeFeedback();
   resetChatSession();
   setWidgetOpen(false);
   notifyHostClose();
+}
+
+async function endCurrentBackendSession() {
+  if (!currentUser || !currentSessionId) {
+    return;
+  }
+
+  try {
+    await fetch(`${API_BASE_URL}/chat/sessions/${currentSessionId}/end`, {
+      method: "POST",
+      headers: {
+        "X-OneAssist-User-Id": String(currentUser.userId),
+      },
+    });
+  } catch (error) {
+    console.error("End chat session error:", error);
+  } finally {
+    currentSessionId = "";
+  }
 }
 
 function resetChatSession() {
@@ -791,6 +1039,10 @@ function resetChatSession() {
   }
 
   setComposerState(false);
+
+  if (ENABLE_HISTORY_PANEL) {
+    // Reserved for the Phase 1 history panel flag; UI stays disabled by default.
+  }
 }
 
 function updateFeedbackSubmitState() {

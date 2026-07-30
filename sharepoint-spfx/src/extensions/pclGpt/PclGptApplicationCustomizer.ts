@@ -1,5 +1,7 @@
 import { BaseApplicationCustomizer } from "@microsoft/sp-application-base";
 
+const WIDGET_VERSION = "onedesk-assistant-v2";
+
 export interface IPclGptApplicationCustomizerProperties {
   enabled?: boolean;
   chatbotUrl?: string;
@@ -31,17 +33,17 @@ export default class PclGptApplicationCustomizer
       currentPath === expectedPath ||
       currentPath.indexOf(expectedPath) >= 0;
 
-    console.log("One Bot extension loaded");
+    console.log("OneDesk Assistant extension loaded");
     console.log("Current path:", currentPath);
     console.log("Expected path:", expectedPath);
 
     if (!isOneDeskPage) {
-      console.log("One Bot hidden because this is not One Desk.");
+      console.log("OneDesk Assistant hidden because this is not One Desk.");
       return Promise.resolve();
     }
 
     if (this.properties.enabled === false) {
-      console.log("One Bot is disabled for SharePoint.");
+      console.log("OneDesk Assistant is disabled for SharePoint.");
       return Promise.resolve();
     }
 
@@ -80,7 +82,7 @@ export default class PclGptApplicationCustomizer
     this.launcherButton.type = "button";
     this.launcherButton.setAttribute(
       "aria-label",
-      "Open One Bot"
+      "Open OneDesk Assistant"
     );
     this.launcherButton.setAttribute(
       "aria-expanded",
@@ -96,7 +98,7 @@ export default class PclGptApplicationCustomizer
     this.launcherButton.style.cursor = "pointer";
 
     const label = document.createElement("span");
-    label.textContent = "One Bot";
+    label.textContent = "OneDesk Assistant";
 
     label.style.minWidth = "154px";
     label.style.height = "44px";
@@ -211,7 +213,7 @@ export default class PclGptApplicationCustomizer
     this.panel = document.createElement("div");
     this.panel.id = "pcl-gpt-sharepoint-panel";
     this.panel.setAttribute("role", "dialog");
-    this.panel.setAttribute("aria-label", "One Bot");
+    this.panel.setAttribute("aria-label", "OneDesk Assistant");
 
     this.panel.style.position = "fixed";
     this.panel.style.top = "92px";
@@ -237,7 +239,7 @@ export default class PclGptApplicationCustomizer
     const iframe = document.createElement("iframe");
     iframe.id = "pcl-gpt-frame";
     iframe.src = this.getChatbotUrl();
-    iframe.title = "One Bot";
+    iframe.title = "OneDesk Assistant";
 
     iframe.setAttribute(
       "allow",
@@ -291,10 +293,12 @@ export default class PclGptApplicationCustomizer
 
       url.searchParams.set("embed", "1");
       url.searchParams.set("apiBase", apiBaseUrl);
+      url.searchParams.set("v", WIDGET_VERSION);
       url.searchParams.set(
         "parentOrigin",
         window.location.origin
       );
+      this.appendUserContext(url);
 
       return url.toString();
     } catch {
@@ -306,9 +310,43 @@ export default class PclGptApplicationCustomizer
       return (
         `${rawChatbotUrl}${separator}embed=1`
         + `&apiBase=${encodeURIComponent(apiBaseUrl)}`
+        + `&v=${encodeURIComponent(WIDGET_VERSION)}`
         + `&parentOrigin=${encodeURIComponent(window.location.origin)}`
+        + this.getEncodedUserContext()
       );
     }
+  }
+
+  private appendUserContext(url: URL): void {
+    const profile = this.getCurrentUserProfile();
+
+    Object.keys(profile).forEach((key) => {
+      const value = profile[key];
+
+      if (value) {
+        url.searchParams.set(key, value);
+      }
+    });
+  }
+
+  private getEncodedUserContext(): string {
+    const profile = this.getCurrentUserProfile();
+
+    return Object.keys(profile)
+      .filter((key) => Boolean(profile[key]))
+      .map((key) => `&${key}=${encodeURIComponent(profile[key])}`)
+      .join("");
+  }
+
+  private getCurrentUserProfile(): { [key: string]: string } {
+    const user = this.context.pageContext.user;
+
+    return {
+      displayName: user.displayName || "",
+      preferredName: user.displayName || "",
+      email: user.email || user.loginName || "",
+      entraObjectId: "",
+    };
   }
 
   private getLogoUrl(): string {

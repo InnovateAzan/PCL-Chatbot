@@ -213,6 +213,9 @@ class PolicyRetriever:
         documents = self._first_result_list(
             results.get("documents")
         )
+        ids = self._first_result_list(
+            results.get("ids")
+        )
         metadatas = self._first_result_list(
             results.get("metadatas")
         )
@@ -263,11 +266,17 @@ class PolicyRetriever:
                 normalized_query,
                 document_text,
             )
+            policy_intent_score = self._policy_intent_score(
+                normalized_query,
+                document_name,
+                document_text,
+            )
 
             final_score = (
-                semantic_score * 0.65
-                + filename_score * 0.25
+                semantic_score * 0.45
+                + filename_score * 0.20
                 + keyword_score * 0.10
+                + policy_intent_score * 0.25
             )
 
             # Avoid irrelevant generic matches.
@@ -293,6 +302,13 @@ class PolicyRetriever:
                     document_text,
                     normalized_query,
                 ),
+                chunk_id=(
+                    str(ids[index])
+                    if index < len(ids)
+                    and ids[index] is not None
+                    else None
+                ),
+                similarity_score=round(final_score, 4),
             )
 
             ranked_results.append(
@@ -907,6 +923,52 @@ class PolicyRetriever:
         matches = query_words & document_words
 
         return len(matches) / len(query_words)
+
+    def _policy_intent_score(
+        self,
+        query: str,
+        document_name: str,
+        document: str,
+    ) -> float:
+        normalized_name = self._normalize_filename(document_name)
+        normalized_document = self._normalize_text(document[:3000])
+
+        endpoint_terms = {
+            "laptop",
+            "desktop",
+            "endpoint",
+            "asset",
+            "device",
+            "pool laptop",
+        }
+
+        if any(term in query for term in endpoint_terms):
+            if "asset endpoint management" in normalized_name:
+                return 1.0
+
+            if (
+                "tier 1 laptop" in normalized_document
+                or "tier 2 laptop" in normalized_document
+                or "pool laptop" in normalized_document
+            ):
+                return 0.9
+
+            if "hardware procurement" in normalized_name:
+                return 0.15
+
+        procurement_terms = {
+            "procurement",
+            "purchase",
+            "buy",
+            "approval",
+            "vendor",
+        }
+
+        if any(term in query for term in procurement_terms):
+            if "hardware procurement" in normalized_name:
+                return 1.0
+
+        return 0.0
 
     def _make_snippet(
         self,

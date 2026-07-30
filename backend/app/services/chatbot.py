@@ -30,7 +30,12 @@ class PolicyChatbot:
         self.retriever = retriever
         self.gemini_client = self._build_gemini_client()
 
-    def answer(self, message: str) -> ChatResponse:
+    def answer(
+        self,
+        message: str,
+        user_display_name: str | None = None,
+        preferred_name: str | None = None,
+    ) -> ChatResponse:
         message = message.strip()
 
         if not message:
@@ -41,7 +46,11 @@ class PolicyChatbot:
                 provider="validation",
             )
 
-        greeting_answer = self._handle_greeting(message)
+        greeting_answer = self._handle_greeting(
+            message,
+            user_display_name=user_display_name,
+            preferred_name=preferred_name,
+        )
 
         if greeting_answer:
             return ChatResponse(
@@ -237,7 +246,7 @@ class PolicyChatbot:
         context = "\n\n".join(context_blocks)
 
         return (
-            "You are Pakistan Cables OneBot.\n"
+            "You are Pakistan Cables OneDesk Assistant.\n"
             "Answer only from the policy context supplied below.\n"
             "Do not invent internal rules, limits, approvals, timelines, "
             "roles, controls, procedures or requirements.\n"
@@ -331,7 +340,7 @@ class PolicyChatbot:
         message: str,
     ) -> str:
         return (
-            "You are Pakistan Cables OneBot.\n"
+            "You are Pakistan Cables OneDesk Assistant.\n"
             "The policy knowledge base did not contain a reliable answer.\n"
             "Answer using accurate general knowledge.\n"
             "Do not claim that the answer comes from Pakistan Cables policy.\n"
@@ -661,6 +670,8 @@ class PolicyChatbot:
     @staticmethod
     def _handle_greeting(
         message: str,
+        user_display_name: str | None = None,
+        preferred_name: str | None = None,
     ) -> str | None:
         normalized = message.lower().strip()
 
@@ -678,9 +689,16 @@ class PolicyChatbot:
         }
 
         if normalized in greetings:
+            if user_display_name or preferred_name:
+                name = PolicyChatbot._safe_first_name(
+                    display_name=user_display_name or "",
+                    preferred_name=preferred_name,
+                )
+                return f"Hi {name}, how can I help you today?"
+
             return (
                 "Assalam o Alaikum!\n\n"
-                "I am the Pakistan Cables OneBot.\n\n"
+                "I am the Pakistan Cables OneDesk Assistant.\n\n"
                 "[SECTION]How I Can Help[/SECTION]\n"
                 "[BULLET]Ask about available Pakistan Cables policies"
                 "[/BULLET]\n"
@@ -689,3 +707,13 @@ class PolicyChatbot:
             )
 
         return None
+
+    @staticmethod
+    def _safe_first_name(
+        *,
+        display_name: str,
+        preferred_name: str | None = None,
+    ) -> str:
+        source = (preferred_name or display_name or "").strip()
+        match = re.search(r"[A-Za-z][A-Za-z.'-]*", source)
+        return match.group(0) if match else "there"

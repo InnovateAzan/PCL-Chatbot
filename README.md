@@ -71,7 +71,7 @@ policies/
 5. Start the API:
 
    ```powershell
-   uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8001
+   uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8085
    ```
 
 6. Open [frontend/index.html](/D:/PROJECT/Chart%20Bot/frontend/index.html) in a browser or serve the `frontend` folder with a simple local static server.
@@ -82,6 +82,54 @@ This project disables environment proxy variables for Gemini by default because
 some local setups export placeholder proxy values that break outbound model
 requests. If your network requires a real proxy, set `GEMINI_USE_ENV_PROXY=true`
 in `.env`.
+
+## PostgreSQL chat history
+
+Set the PostgreSQL connection string in `.env`. Do not commit `.env`.
+
+```env
+DATABASE_URL=postgresql+psycopg2://appuser:YOUR_PASSWORD@10.4.3.78:5432/oneassist_db
+```
+
+The application maps to existing PostgreSQL tables and does not create,
+truncate, or migrate them at startup.
+
+Existing tables used:
+
+- `users`
+- `chat_sessions`
+- `chat_messages`
+- `message_sources`
+- `feedback`
+- `unanswered_questions`
+- `documents`
+- `document_chunks`
+- `audit_logs`
+
+Test the database connection:
+
+```powershell
+python scripts/test_postgres_connection.py
+```
+
+Start the backend:
+
+```powershell
+python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8085
+```
+
+To verify records in pgAdmin after sending a chat message, run:
+
+```sql
+select * from users order by id desc limit 10;
+select * from chat_sessions order by id desc limit 10;
+select * from chat_messages order by id desc limit 20;
+select * from message_sources order by id desc limit 20;
+select * from unanswered_questions order by id desc limit 20;
+```
+
+If PostgreSQL is unavailable or a write fails, OneDesk Assistant logs the error
+and still returns the chatbot answer.
 
 ## SharePoint note
 
