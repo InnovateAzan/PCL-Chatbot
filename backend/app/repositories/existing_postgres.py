@@ -318,6 +318,9 @@ class ExistingPostgresRepository:
         if not session or not self._same_user(session, self._row_id(user)):
             return None
 
+        if str(session.get("status") or "").upper() == "ENDED":
+            return None
+
         message_table = self._table("chat_messages")
         session_id = self._row_id(session)
         clauses = []
@@ -344,7 +347,42 @@ class ExistingPostgresRepository:
             ).mappings().all()
             messages = [dict(row) for row in rows]
 
+        self._attach_sources_to_messages(messages)
+
         return {"session": session, "messages": messages}
+
+    def end_session(
+        self,
+        *,
+        session_uuid: str,
+        user_email: str,
+    ) -> bool:
+        user = self.get_or_create_user(
+            user_email=user_email,
+            display_name=None,
+            department=None,
+        )
+        session_table = self._table("chat_sessions")
+        session = self._find_one(
+            session_table,
+            {"session_uuid": session_uuid, "uuid": session_uuid, "id": session_uuid},
+            mode="or",
+        )
+        if not session or not self._same_user(session, self._row_id(user)):
+            return False
+
+        self._safe_update_by_pk(
+            session_table,
+            session,
+            {
+                "status": "ENDED",
+                "ended_at": datetime.now(UTC),
+                "last_activity_at": datetime.now(UTC),
+                "updated_at": datetime.now(UTC),
+            },
+        )
+        self.db.commit()
+        return True
 
     def _table(self, table_name: str) -> Table:
         if table_name not in self._tables:
@@ -448,6 +486,58 @@ class ExistingPostgresRepository:
             .where(table.c[pk] == row[pk])
             .values(**clean_values)
         )
+
+    def _attach_sources_to_messages(self, messages: list[dict[str, Any]]) -> None:
+        assistant_message_ids = [
+            self._row_id(message)
+            for message in messages
+            if str(message.get("role") or "").lower() in {"assistant", "bot"}
+            and self._row_id(message) is not None
+        ]
+        if not assistant_message_ids:
+            return
+
+        try:
+            source_table = self._table("message_sources")
+        except RuntimeError:
+            return
+
+        clauses = []
+        for column in ("message_id", "assistant_message_id"):
+            if column in source_table.c:
+                clauses.append(source_table.c[column].in_(assistant_message_ids))
+
+        if not clauses:
+            return
+
+        order_column = (
+            source_table.c.source_order
+            if "source_order" in source_table.c
+            else source_table.c.id
+            if "id" in source_table.c
+            else None
+        )
+        statement = select(source_table).where(
+            clauses[0] if len(clauses) == 1 else or_(*clauses)
+        )
+        if order_column is not None:
+            statement = statement.order_by(order_column.asc())
+
+        rows = self.db.execute(statement).mappings().all()
+        sources_by_message_id: dict[int, list[dict[str, Any]]] = {}
+        for row in rows:
+            source = dict(row)
+            message_id = source.get("message_id") or source.get("assistant_message_id")
+            try:
+                normalized_message_id = int(message_id)
+            except (TypeError, ValueError):
+                continue
+            sources_by_message_id.setdefault(normalized_message_id, []).append(source)
+
+        for message in messages:
+            message_id = self._row_id(message)
+            if message_id is not None:
+                message["sources"] = sources_by_message_id.get(message_id, [])
 
     @staticmethod
     def _pk_column(table: Table) -> str | None:

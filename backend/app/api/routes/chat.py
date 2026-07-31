@@ -289,6 +289,7 @@ async def end_chat_session(
     session_id: UUID,
     current_user: ChatbotUser = Depends(get_current_user),
     db_session: AsyncSession = Depends(get_db_session),
+    existing_db: Session = Depends(get_existing_db),
 ) -> ChatSessionResponse:
     chat_session = await ChatHistoryService(
         db_session,
@@ -297,4 +298,20 @@ async def end_chat_session(
         user=current_user,
         session_id=session_id,
     )
+    try:
+        ExistingPostgresRepository(existing_db).end_session(
+            session_uuid=str(session_id),
+            user_email=current_user.email,
+        )
+    except Exception as exc:
+        rollback_safely(existing_db)
+        logger.exception(
+            "Existing PostgreSQL session end failed: session_id=%s error=%s",
+            session_id,
+            exc,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database end-session save failed: {exc}",
+        ) from exc
     return ChatSessionResponse.model_validate(chat_session)

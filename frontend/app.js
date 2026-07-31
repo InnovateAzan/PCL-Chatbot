@@ -1,5 +1,6 @@
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8085/api";
 const LOCAL_PROFILE_STORAGE_KEY = "oneassist.localProfile";
+const ACTIVE_SESSION_STORAGE_PREFIX = "oneassist.activeSessionId";
 
 const runtimeConfig = getRuntimeConfig();
 const API_BASE_URL = runtimeConfig.apiBaseUrl;
@@ -36,6 +37,8 @@ let selectedRating = "";
 let currentUser = null;
 let currentSessionId = "";
 let initializingUserPromise = null;
+let ensuringSessionPromise = null;
+const renderedMessageKeys = new Set();
 
 document.body.classList.toggle("embed-mode", EMBED_MODE);
 document.body.classList.toggle("hosted-mode", HOSTED_MODE);
@@ -49,8 +52,8 @@ if (HOSTED_MODE) {
 setWidgetOpen(DEFAULT_OPEN);
 updateFeedbackSubmitState();
 checkHealth();
-initializeCurrentUser().catch((error) => {
-  console.error("User initialization error:", error);
+prepareActiveSession().catch((error) => {
+  console.error("Active chat session initialization error:", error);
 });
 
 launcherButton?.addEventListener("click", () => {
@@ -108,17 +111,9 @@ chatForm?.addEventListener("submit", async (event) => {
   setComposerState(true);
 
   try {
-    let user = null;
-    let sessionId = "";
-    let historyEnabled = false;
-
-    try {
-      user = await initializeCurrentUser();
-      sessionId = await ensureChatSession(user);
-      historyEnabled = Boolean(user?.userId && sessionId);
-    } catch (historyError) {
-      console.warn("Chat history unavailable; sending stateless chat.", historyError);
-    }
+    const user = await initializeCurrentUser();
+    const sessionId = await ensureChatSession(user);
+    const historyEnabled = Boolean(user?.userId && sessionId);
 
     const response = await fetch(`${API_BASE_URL}/chat`, {
       method: "POST",
@@ -131,8 +126,11 @@ chatForm?.addEventListener("submit", async (event) => {
       body: JSON.stringify({
         message,
         ...(historyEnabled ? { sessionId } : {}),
+        ...(currentSessionId ? { sessionUuid: currentSessionId } : {}),
+        userEmail: runtimeConfig.userProfile.email,
         displayName: runtimeConfig.userProfile.displayName,
         preferredName: runtimeConfig.userProfile.preferredName,
+        department: runtimeConfig.userProfile.department,
       }),
     });
 
@@ -153,6 +151,7 @@ chatForm?.addEventListener("submit", async (event) => {
     }
 
     const payload = await response.json();
+    persistResponseSession(payload);
 
     appendMessage(
       "bot",
@@ -162,6 +161,7 @@ chatForm?.addEventListener("submit", async (event) => {
         notice: payload.notice,
         enableFeedback: Boolean(payload.assistantMessageId),
         assistantMessageId: payload.assistantMessageId,
+        messageId: payload.assistantMessageId,
       }
     );
   } catch (error) {
@@ -203,8 +203,17 @@ function appendMessage(
     return;
   }
 
+  const messageKey = buildRenderedMessageKey(role, meta);
+  if (messageKey && renderedMessageKeys.has(messageKey)) {
+    return;
+  }
+
   const article = document.createElement("article");
   article.className = `message ${role}`;
+  if (messageKey) {
+    article.dataset.messageKey = messageKey;
+    renderedMessageKeys.add(messageKey);
+  }
 
   const bubble = document.createElement("div");
   bubble.className = "message-bubble";
@@ -241,6 +250,20 @@ function appendMessage(
 
   messages.appendChild(article);
   messages.scrollTop = messages.scrollHeight;
+}
+
+function buildRenderedMessageKey(role, meta = {}) {
+  const id =
+    meta.messageId ||
+    meta.assistantMessageId ||
+    meta.userMessageId ||
+    "";
+
+  if (!id) {
+    return "";
+  }
+
+  return `${role}:${id}`;
 }
 
 function formatAssistantAnswer(answer) {
@@ -913,11 +936,46 @@ async function initializeCurrentUser() {
   return initializingUserPromise;
 }
 
+async function prepareActiveSession() {
+  const user = await initializeCurrentUser();
+  return ensureChatSession(user);
+}
+
 async function ensureChatSession(user) {
   if (currentSessionId) {
     return currentSessionId;
   }
 
+  if (ensuringSessionPromise) {
+    return ensuringSessionPromise;
+  }
+
+  ensuringSessionPromise = resolveActiveChatSession(user).finally(() => {
+    ensuringSessionPromise = null;
+  });
+
+  return ensuringSessionPromise;
+}
+
+async function resolveActiveChatSession(user) {
+  const storedSessionId = readActiveSessionId();
+
+  if (storedSessionId) {
+    currentSessionId = storedSessionId;
+
+    const restored = await restoreActiveSession(user, storedSessionId);
+    if (restored) {
+      return currentSessionId;
+    }
+
+    clearActiveSessionId();
+    currentSessionId = "";
+  }
+
+  return createChatSession(user);
+}
+
+async function createChatSession(user) {
   const response = await fetch(`${API_BASE_URL}/chat/sessions`, {
     method: "POST",
     headers: {
@@ -938,7 +996,148 @@ async function ensureChatSession(user) {
     throw new Error("Chat session response did not include a session ID.");
   }
 
+  writeActiveSessionId(currentSessionId);
   return currentSessionId;
+}
+
+async function restoreActiveSession(user, sessionId) {
+  const userEmail = runtimeConfig.userProfile.email || user?.email || "";
+  if (!userEmail) {
+    return false;
+  }
+
+  try {
+    const response = await fetch(
+      `${API_BASE_URL}/chat/sessions/${encodeURIComponent(sessionId)}`
+        + `?user_email=${encodeURIComponent(userEmail)}`,
+      {
+        headers: {
+          "X-OneAssist-User-Id": String(user.userId),
+        },
+      }
+    );
+
+    if (!response.ok) {
+      return false;
+    }
+
+    const payload = await response.json();
+    const session = payload.session || {};
+    const status = String(session.status || "").toUpperCase();
+    if (status === "ENDED") {
+      return false;
+    }
+
+    currentSessionId =
+      session.session_uuid ||
+      session.uuid ||
+      sessionId;
+    writeActiveSessionId(currentSessionId);
+    restoreMessages(payload.messages || []);
+    return true;
+  } catch (error) {
+    console.warn("Active chat session restore failed:", error);
+    return false;
+  }
+}
+
+function restoreMessages(historyMessages) {
+  if (!messages || !Array.isArray(historyMessages)) {
+    return;
+  }
+
+  const orderedMessages = [...historyMessages].sort((left, right) => {
+    const leftDate = Date.parse(left.created_at || left.createdAt || "");
+    const rightDate = Date.parse(right.created_at || right.createdAt || "");
+
+    if (!Number.isNaN(leftDate) && !Number.isNaN(rightDate) && leftDate !== rightDate) {
+      return leftDate - rightDate;
+    }
+
+    return Number(left.id || 0) - Number(right.id || 0);
+  });
+
+  orderedMessages.forEach((message) => {
+    const rawRole = String(message.role || "").toLowerCase();
+    const role = rawRole === "assistant" || rawRole === "bot"
+      ? "bot"
+      : "user";
+    const text =
+      message.message_text ||
+      message.messageText ||
+      message.content ||
+      message.message ||
+      message.response_text ||
+      "";
+    const messageId = message.id || message.message_id || message.messageId;
+
+    appendMessage(
+      role,
+      text,
+      message.sources || [],
+      {
+        enableFeedback: role === "bot" && Boolean(messageId),
+        assistantMessageId: role === "bot" ? messageId : undefined,
+        userMessageId: role === "user" ? messageId : undefined,
+        messageId,
+      }
+    );
+  });
+}
+
+function persistResponseSession(payload) {
+  const responseSessionId =
+    payload.sessionUuid ||
+    (
+      typeof payload.sessionId === "string"
+        ? payload.sessionId
+        : ""
+    );
+
+  if (responseSessionId) {
+    currentSessionId = responseSessionId;
+    writeActiveSessionId(responseSessionId);
+  } else if (currentSessionId) {
+    writeActiveSessionId(currentSessionId);
+  }
+}
+
+function getActiveSessionStorageKey() {
+  const profileEmail = (
+    runtimeConfig.userProfile.email ||
+    "anonymous"
+  ).toLowerCase();
+
+  return `${ACTIVE_SESSION_STORAGE_PREFIX}:${API_BASE_URL}:${profileEmail}`;
+}
+
+function readActiveSessionId() {
+  try {
+    return String(
+      window.localStorage.getItem(getActiveSessionStorageKey()) || ""
+    ).trim();
+  } catch {
+    return "";
+  }
+}
+
+function writeActiveSessionId(sessionId) {
+  try {
+    window.localStorage.setItem(
+      getActiveSessionStorageKey(),
+      String(sessionId || "")
+    );
+  } catch {
+    // Local storage can be disabled in embedded browser contexts.
+  }
+}
+
+function clearActiveSessionId() {
+  try {
+    window.localStorage.removeItem(getActiveSessionStorageKey());
+  } catch {
+    // Local storage can be disabled in embedded browser contexts.
+  }
 }
 
 function setComposerState(isLoading) {
@@ -1011,6 +1210,8 @@ async function endChatSession() {
 
 async function endCurrentBackendSession() {
   if (!currentUser || !currentSessionId) {
+    currentSessionId = "";
+    clearActiveSessionId();
     return;
   }
 
@@ -1025,6 +1226,7 @@ async function endCurrentBackendSession() {
     console.error("End chat session error:", error);
   } finally {
     currentSessionId = "";
+    clearActiveSessionId();
   }
 }
 
@@ -1032,6 +1234,8 @@ function resetChatSession() {
   if (messages) {
     messages.replaceChildren();
   }
+
+  renderedMessageKeys.clear();
 
   if (messageInput) {
     messageInput.value = "";

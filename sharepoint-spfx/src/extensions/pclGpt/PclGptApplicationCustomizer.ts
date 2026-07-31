@@ -176,10 +176,27 @@ export default class PclGptApplicationCustomizer
 
   private openPanel(): void {
     if (
-      this.panel ||
       !this.root ||
       !this.launcherButton
     ) {
+      return;
+    }
+
+    if (this.panel) {
+      this.panel.style.display = "block";
+      if (this.overlay) {
+        this.overlay.style.display = "block";
+      }
+      this.launcherButton.style.display = "none";
+      this.launcherButton.setAttribute(
+        "aria-expanded",
+        "true"
+      );
+      this.applyResponsivePanelSize();
+      window.addEventListener(
+        "resize",
+        this.applyResponsivePanelSize
+      );
       return;
     }
 
@@ -413,13 +430,11 @@ export default class PclGptApplicationCustomizer
     );
 
     if (this.panel) {
-      this.panel.remove();
-      this.panel = undefined;
+      this.panel.style.display = "none";
     }
 
     if (this.overlay) {
-      this.overlay.remove();
-      this.overlay = undefined;
+      this.overlay.style.display = "none";
     }
 
     if (this.launcherButton) {
@@ -491,6 +506,16 @@ export default class PclGptApplicationCustomizer
     );
 
     this.closePanel();
+
+    if (this.panel) {
+      this.panel.remove();
+      this.panel = undefined;
+    }
+
+    if (this.overlay) {
+      this.overlay.remove();
+      this.overlay = undefined;
+    }
 
     if (this.root) {
       this.root.remove();
