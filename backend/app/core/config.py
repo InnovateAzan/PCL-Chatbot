@@ -1,4 +1,6 @@
 from functools import lru_cache
+import json
+from typing import Any
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -23,9 +25,15 @@ class Settings(BaseSettings):
     azure_client_id: str = ""
     azure_client_secret: str = ""
     azure_api_audience: str = ""
+    azure_authority: str = ""
     azure_admin_role: str = "ADMIN"
     azure_user_role: str = "USER"
     graph_base_url: str = "https://graph.microsoft.com/v1.0"
+    onedesk_site_url: str = "https://pakistancable.sharepoint.com/sites/ITHelpDesk2"
+    onedesk_site_id: str = ""
+    it_service_desk_list_id: str = ""
+    it_service_desk_list_title: str = "Issue tracker"
+    onedesk_it_field_mapping_json: str = ""
     sharepoint_site_id: str = ""
     sharepoint_site_url: str = ""
     onedesk_it_list_id: str = ""
@@ -86,6 +94,12 @@ class Settings(BaseSettings):
     enable_analytics: bool = False
     enable_onedesk_integration: bool = False
     enable_entra_auth: bool = False
+    enable_onedesk_schema_discovery: bool = True
+    enable_onedesk_it_read: bool = False
+    enable_onedesk_it_create: bool = False
+    enable_it_ticket_drafts: bool = True
+    enable_it_ticket_attachments: bool = False
+    enable_onedesk_mock_mode: bool = True
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -136,6 +150,36 @@ class Settings(BaseSettings):
             )
 
         return _quote_database_credentials(database_url)
+
+    @property
+    def effective_azure_authority(self) -> str:
+        if self.azure_authority:
+            return self.azure_authority.rstrip("/")
+        if self.azure_tenant_id:
+            return f"https://login.microsoftonline.com/{self.azure_tenant_id}/v2.0"
+        return ""
+
+    @property
+    def effective_onedesk_site_id(self) -> str:
+        return self.onedesk_site_id or self.sharepoint_site_id
+
+    @property
+    def effective_it_service_desk_list_id(self) -> str:
+        return self.it_service_desk_list_id or self.onedesk_it_list_id
+
+    @property
+    def effective_it_service_desk_list_title(self) -> str:
+        return self.it_service_desk_list_title or self.onedesk_it_list_title
+
+    @property
+    def onedesk_it_field_mapping(self) -> dict[str, dict[str, Any]]:
+        if not self.onedesk_it_field_mapping_json.strip():
+            return {}
+        try:
+            payload = json.loads(self.onedesk_it_field_mapping_json)
+        except json.JSONDecodeError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
 
 
 @lru_cache

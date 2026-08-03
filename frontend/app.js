@@ -17,7 +17,6 @@ const launcherButton = document.getElementById("launcherButton");
 const chatWidget = document.getElementById("chatWidget");
 const collapseButton = document.getElementById("collapseButton");
 const endChatButton = document.getElementById("endChatButton");
-const statusNote = document.getElementById("statusNote");
 
 const feedbackModal = document.getElementById("feedbackModal");
 const feedbackBackdrop = document.getElementById("feedbackBackdrop");
@@ -38,6 +37,7 @@ let currentUser = null;
 let currentSessionId = "";
 let initializingUserPromise = null;
 let ensuringSessionPromise = null;
+let typingIndicatorElement = null;
 const renderedMessageKeys = new Set();
 
 document.body.classList.toggle("embed-mode", EMBED_MODE);
@@ -51,7 +51,6 @@ if (HOSTED_MODE) {
 
 setWidgetOpen(DEFAULT_OPEN);
 updateFeedbackSubmitState();
-checkHealth();
 prepareActiveSession().catch((error) => {
   console.error("Active chat session initialization error:", error);
 });
@@ -109,11 +108,23 @@ chatForm?.addEventListener("submit", async (event) => {
   messageInput.value = "";
   autoResizeTextarea();
   setComposerState(true);
+  showTypingIndicator();
 
   try {
-    const user = await initializeCurrentUser();
-    const sessionId = await ensureChatSession(user);
-    const historyEnabled = Boolean(user?.userId && sessionId);
+    let user = null;
+    let sessionId = currentSessionId || "";
+    let historyEnabled = false;
+
+    try {
+      user = await initializeCurrentUser();
+      sessionId = await ensureChatSession(user);
+      historyEnabled = Boolean(user?.userId && sessionId);
+    } catch (historyError) {
+      console.warn(
+        "Legacy chat history session unavailable; using existing PostgreSQL chat save flow.",
+        historyError
+      );
+    }
 
     const response = await fetch(`${API_BASE_URL}/chat`, {
       method: "POST",
@@ -152,6 +163,7 @@ chatForm?.addEventListener("submit", async (event) => {
 
     const payload = await response.json();
     persistResponseSession(payload);
+    removeTypingIndicator();
 
     appendMessage(
       "bot",
@@ -166,6 +178,7 @@ chatForm?.addEventListener("submit", async (event) => {
     );
   } catch (error) {
     console.error("Chat request error:", error);
+    removeTypingIndicator();
     const errorText = String(
       error?.message || ""
     ).trim();
@@ -185,6 +198,7 @@ chatForm?.addEventListener("submit", async (event) => {
       fallbackMessage
     );
   } finally {
+    removeTypingIndicator();
     setComposerState(false);
     messageInput?.focus();
   }
@@ -250,6 +264,44 @@ function appendMessage(
 
   messages.appendChild(article);
   messages.scrollTop = messages.scrollHeight;
+}
+
+function showTypingIndicator() {
+  if (!messages || typingIndicatorElement) {
+    return;
+  }
+
+  const article = document.createElement("article");
+  article.className = "message bot typing-indicator-message";
+  article.setAttribute("aria-live", "polite");
+
+  const bubble = document.createElement("div");
+  bubble.className = "message-bubble typing-indicator-bubble";
+
+  const dots = document.createElement("div");
+  dots.className = "typing-dots";
+  dots.setAttribute("aria-label", "Assistant is typing");
+
+  for (let index = 0; index < 3; index += 1) {
+    const dot = document.createElement("span");
+    dot.className = "typing-dot";
+    dots.appendChild(dot);
+  }
+
+  bubble.appendChild(dots);
+  article.appendChild(bubble);
+  messages.appendChild(article);
+  typingIndicatorElement = article;
+  messages.scrollTop = messages.scrollHeight;
+}
+
+function removeTypingIndicator() {
+  if (!typingIndicatorElement) {
+    return;
+  }
+
+  typingIndicatorElement.remove();
+  typingIndicatorElement = null;
 }
 
 function buildRenderedMessageKey(role, meta = {}) {
@@ -863,47 +915,6 @@ function handleComposerKeydown(event) {
   chatForm?.requestSubmit();
 }
 
-async function checkHealth() {
-  if (!statusNote) {
-    return;
-  }
-
-  if (window.location.protocol === "file:") {
-    statusNote.textContent =
-      "Open the frontend through http://127.0.0.1:5500 so it can connect to the backend.";
-
-    return;
-  }
-
-  try {
-    const response = await fetch(
-      `${API_BASE_URL}/health`
-    );
-
-    if (!response.ok) {
-      throw new Error("Health check failed");
-    }
-
-    const payload = await response.json();
-
-    statusNote.textContent =
-      (
-        payload.gemini_configured ||
-        payload.details?.gemini_configured
-      )
-        ? "Live Gemini is configured for richer responses."
-        : "Policy fallback mode is active until a Gemini API key is added.";
-  } catch (error) {
-    console.error(
-      "Health check error:",
-      error
-    );
-
-    statusNote.textContent =
-      "Backend is offline. Start the local API to activate the assistant.";
-  }
-}
-
 async function initializeCurrentUser() {
   if (currentUser) {
     return currentUser;
@@ -937,8 +948,23 @@ async function initializeCurrentUser() {
 }
 
 async function prepareActiveSession() {
-  const user = await initializeCurrentUser();
-  return ensureChatSession(user);
+  const storedSessionId = readActiveSessionId();
+  if (!storedSessionId) {
+    return "";
+  }
+
+  currentSessionId = storedSessionId;
+  const restored = await restoreActiveSession(
+    { userId: "", email: runtimeConfig.userProfile.email },
+    storedSessionId
+  );
+
+  if (!restored) {
+    clearActiveSessionId();
+    currentSessionId = "";
+  }
+
+  return currentSessionId;
 }
 
 async function ensureChatSession(user) {
@@ -1011,9 +1037,9 @@ async function restoreActiveSession(user, sessionId) {
       `${API_BASE_URL}/chat/sessions/${encodeURIComponent(sessionId)}`
         + `?user_email=${encodeURIComponent(userEmail)}`,
       {
-        headers: {
-          "X-OneAssist-User-Id": String(user.userId),
-        },
+        headers: user?.userId
+          ? { "X-OneAssist-User-Id": String(user.userId) }
+          : {},
       }
     );
 

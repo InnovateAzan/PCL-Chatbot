@@ -87,16 +87,17 @@ class ExistingPostgresRepository:
     ) -> dict[str, Any]:
         table = self._table("chat_sessions")
 
-        if session_uuid:
+        lookup_candidates = self._session_lookup_candidates(session_uuid)
+        if lookup_candidates:
             existing = self._find_one(
                 table,
-                {"session_uuid": session_uuid, "uuid": session_uuid, "id": session_uuid},
+                lookup_candidates,
                 mode="or",
             )
             if existing and self._same_user(existing, user_id):
                 return existing
 
-        new_uuid = session_uuid or str(uuid.uuid4())
+        new_uuid = self._valid_session_uuid_or_new(session_uuid)
         return self._insert(
             table,
             {
@@ -310,10 +311,11 @@ class ExistingPostgresRepository:
             department=None,
         )
         session_table = self._table("chat_sessions")
-        session = self._find_one(
-            session_table,
-            {"session_uuid": session_uuid, "uuid": session_uuid, "id": session_uuid},
-            mode="or",
+        lookup_candidates = self._session_lookup_candidates(session_uuid)
+        session = (
+            self._find_one(session_table, lookup_candidates, mode="or")
+            if lookup_candidates
+            else None
         )
         if not session or not self._same_user(session, self._row_id(user)):
             return None
@@ -323,6 +325,7 @@ class ExistingPostgresRepository:
 
         message_table = self._table("chat_messages")
         session_id = self._row_id(session)
+        stored_session_uuid = self._row_uuid(session) or session_uuid
         clauses = []
         if session_id is not None:
             for column in ("session_id", "chat_session_id"):
@@ -330,7 +333,7 @@ class ExistingPostgresRepository:
                     clauses.append(message_table.c[column] == session_id)
         for column in ("session_uuid", "chat_session_uuid"):
             if column in message_table.c:
-                clauses.append(message_table.c[column] == session_uuid)
+                clauses.append(message_table.c[column] == stored_session_uuid)
 
         if not clauses:
             messages = []
@@ -363,10 +366,11 @@ class ExistingPostgresRepository:
             department=None,
         )
         session_table = self._table("chat_sessions")
-        session = self._find_one(
-            session_table,
-            {"session_uuid": session_uuid, "uuid": session_uuid, "id": session_uuid},
-            mode="or",
+        lookup_candidates = self._session_lookup_candidates(session_uuid)
+        session = (
+            self._find_one(session_table, lookup_candidates, mode="or")
+            if lookup_candidates
+            else None
         )
         if not session or not self._same_user(session, self._row_id(user)):
             return False
@@ -560,6 +564,37 @@ class ExistingPostgresRepository:
     def _row_uuid(row: dict[str, Any]) -> str | None:
         value = row.get("session_uuid") or row.get("uuid")
         return str(value) if value is not None else None
+
+    @staticmethod
+    def _session_lookup_candidates(session_identifier: str | None) -> dict[str, Any]:
+        value = str(session_identifier or "").strip()
+        if not value:
+            return {}
+
+        try:
+            parsed_uuid = uuid.UUID(value)
+        except ValueError:
+            parsed_uuid = None
+
+        if parsed_uuid is not None:
+            return {"session_uuid": str(parsed_uuid)}
+
+        if value.isdigit():
+            return {"id": int(value)}
+
+        return {}
+
+    @staticmethod
+    def _valid_session_uuid_or_new(session_identifier: str | None) -> str:
+        value = str(session_identifier or "").strip()
+        if value:
+            try:
+                return str(uuid.UUID(value))
+            except ValueError:
+                logger.warning(
+                    "Invalid chat session identifier supplied; creating a new UUID session."
+                )
+        return str(uuid.uuid4())
 
     @staticmethod
     def _same_user(row: dict[str, Any], user_id: int | None) -> bool:

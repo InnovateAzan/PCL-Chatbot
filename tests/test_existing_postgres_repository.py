@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -189,3 +191,15 @@ def test_guest_user_is_reused_and_feedback_validates_message():
 
     assert user_one["id"] == user_two["id"]
     assert feedback["rating"] == "helpful"
+
+
+def test_session_uuid_lookup_does_not_query_integer_id():
+    session_uuid = str(uuid4())
+
+    assert ExistingPostgresRepository._session_lookup_candidates(session_uuid) == {
+        "session_uuid": session_uuid
+    }
+
+
+def test_integer_session_lookup_queries_only_id():
+    assert ExistingPostgresRepository._session_lookup_candidates("42") == {"id": 42}

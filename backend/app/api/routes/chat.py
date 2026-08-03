@@ -139,19 +139,19 @@ def _persist_response_to_existing_db(
         )
     except SQLAlchemyError as exc:
         rollback_safely(db)
-        print(f"SQLAlchemy exception: {exc}")
+        print(f"SQLAlchemy exception: {type(exc).__name__}")
         logger.exception("Existing PostgreSQL save failed with SQLAlchemy exception: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database save failed: {exc}",
+            detail="Database save failed. Please try again or contact IT support.",
         ) from exc
     except Exception as exc:
         rollback_safely(db)
-        print(f"Database save exception: {exc}")
+        print(f"Database save exception: {type(exc).__name__}")
         logger.exception("Existing PostgreSQL save failed with unexpected exception: %s", exc)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database save failed: {exc}",
+            detail="Database save failed. Please try again or contact IT support.",
         ) from exc
 
     logger.info(
@@ -312,6 +312,6 @@ async def end_chat_session(
         )
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Database end-session save failed: {exc}",
+            detail="Database end-session save failed. Please try again or contact IT support.",
         ) from exc
     return ChatSessionResponse.model_validate(chat_session)

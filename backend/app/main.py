@@ -9,6 +9,7 @@ from backend.app.api.routes.admin import router as admin_router
 from backend.app.api.routes.chat import router as chat_router
 from backend.app.api.routes.health import router as health_router
 from backend.app.api.routes.messages import router as messages_router
+from backend.app.api.routes.onedesk_admin import router as onedesk_admin_router
 from backend.app.api.routes.policies import router as policies_router
 from backend.app.api.routes.users import router as users_router
 from backend.app.core.config import get_settings
@@ -66,4 +67,5 @@ app.include_router(policies_router, prefix=settings.api_prefix)
 app.include_router(users_router, prefix=settings.api_prefix)
 app.include_router(messages_router, prefix=settings.api_prefix)
 app.include_router(admin_router, prefix=settings.api_prefix)
+app.include_router(onedesk_admin_router, prefix=settings.api_prefix)
 app.include_router(health_router, prefix=settings.api_prefix)
