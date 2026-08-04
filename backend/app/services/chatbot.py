@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 import traceback
+import logging
 
 try:
     from google import genai
@@ -13,6 +14,15 @@ except ImportError:
 from backend.app.core.config import get_settings
 from backend.app.models.schemas import ChatResponse, SourceReference
 from backend.app.services.retriever import PolicyRetriever
+from backend.app.services.source_utils import (
+    format_source_line,
+    normalize_source_title,
+    source_dedup_key,
+    source_document_key,
+    source_title_without_number,
+)
+
+logger = logging.getLogger(__name__)
 
 
 class PolicyChatbot:
@@ -21,6 +31,8 @@ class PolicyChatbot:
     POLICY_UNAVAILABLE_MESSAGE = (
         "Information not available in IT policies."
     )
+    MAX_DISPLAYED_SOURCES = 3
+    MAX_CONTEXT_SOURCES = 8
 
     def __init__(
         self,
@@ -61,10 +73,38 @@ class PolicyChatbot:
             )
 
         retriever = self._get_retriever()
-        sources = self.retriever.search(message)
+        sources = retriever.search(message)
 
         if not sources:
             return self._build_general_response(message)
+
+        sources = self._select_policy_context_sources(
+            message=message,
+            sources=sources,
+        )
+        self._log_retrieved_chunks(sources)
+
+        direct_answer = self._try_direct_policy_answer(
+            message=message,
+            sources=sources,
+        )
+
+        if direct_answer:
+            selected_sources = sources[:1]
+            response_sources = self._group_sources_by_document(
+                selected_sources
+            )
+            self._log_final_answer_source("Policy")
+
+            return ChatResponse(
+                answer=direct_answer,
+                sources=response_sources,
+                fallback=False,
+                provider="policy-rules",
+                notice=self._build_policy_reference_notice(
+                    response_sources
+                ),
+            )
 
         policy_answer, policy_notice = self._try_gemini_answer(
             message=message,
@@ -73,26 +113,43 @@ class PolicyChatbot:
 
         if policy_answer:
             if self._is_policy_unavailable_answer(policy_answer):
+                self._log_final_answer_source("Gemini")
                 return self._build_general_response(message)
+
+            selected_sources = self._select_answer_sources(
+                sources=sources,
+                answer=policy_answer,
+            )
+            response_sources = self._group_sources_by_document(
+                selected_sources
+            )
+
+            self._log_final_answer_source("Policy")
 
             return ChatResponse(
                 answer=policy_answer,
-                sources=sources,
+                sources=response_sources,
                 fallback=False,
                 provider="gemini-policy",
-                notice=self._build_policy_reference_notice(sources),
+                notice=self._build_policy_reference_notice(
+                    response_sources
+                ),
             )
 
         fallback_answer = self._build_policy_fallback_answer()
+        response_sources = self._group_sources_by_document(
+            sources
+        )
+        self._log_final_answer_source("Policy")
 
         return ChatResponse(
             answer=fallback_answer,
-            sources=sources,
+            sources=response_sources,
             fallback=True,
             provider="policy-rules",
             notice=(
                 policy_notice
-                or self._build_policy_reference_notice(sources)
+                or self._build_policy_reference_notice(response_sources)
             ),
         )
 
@@ -110,7 +167,11 @@ class PolicyChatbot:
     def _get_retriever(self) -> PolicyRetriever:
         if self.retriever is None:
             self.retriever = PolicyRetriever(
-                auto_index=False
+                auto_index=False,
+                top_k=self.MAX_CONTEXT_SOURCES,
+                relevance_threshold=(
+                    self.settings.policy_relevance_threshold
+                ),
             )
 
         return self.retriever
@@ -122,6 +183,7 @@ class PolicyChatbot:
         answer, notice = self._try_general_gemini_answer(message)
 
         if answer:
+            self._log_final_answer_source("Gemini")
             return ChatResponse(
                 answer=answer,
                 sources=[],
@@ -129,6 +191,8 @@ class PolicyChatbot:
                 provider="gemini-general",
                 notice=notice,
             )
+
+        self._log_final_answer_source("Gemini")
 
         return ChatResponse(
             answer=self.POLICY_UNAVAILABLE_MESSAGE,
@@ -244,6 +308,12 @@ class PolicyChatbot:
             )
 
         context = "\n\n".join(context_blocks)
+        interpreted_question = self._interpreted_policy_question(message)
+        interpreted_question_block = (
+            f"\nInterpreted policy question:\n{interpreted_question}\n"
+            if interpreted_question
+            else ""
+        )
 
         return (
             "You are Pakistan Cables OneDesk Assistant.\n"
@@ -278,6 +348,10 @@ class PolicyChatbot:
             "- Do not add general industry practices to policy answers.\n"
             "- Do not add a requirement that is absent from the context.\n"
             "- Do not guess missing policy information.\n\n"
+            "- If a user asks for a laptop expiry date and the context "
+            "describes laptop lifecycle or replacement periods, answer with "
+            "those lifecycle periods instead of treating the answer as "
+            "unavailable.\n\n"
 
             "Correct output example:\n"
             "Vendor agreements must contain controls that protect company "
@@ -287,9 +361,36 @@ class PolicyChatbot:
             "[BULLET]Confidentiality obligations[/BULLET]\n"
             "[BULLET]Breach notification requirements[/BULLET]\n\n"
 
-            f"User question:\n{message}\n\n"
+            f"User question:\n{message}\n"
+            f"{interpreted_question_block}\n"
             f"Policy context:\n{context}"
         )
+
+    @staticmethod
+    def _interpreted_policy_question(message: str) -> str | None:
+        normalized = message.lower()
+
+        if (
+            "laptop" in normalized
+            and any(
+                term in normalized
+                for term in [
+                    "expiry",
+                    "expire",
+                    "expiration",
+                    "life cycle",
+                    "lifecycle",
+                ]
+            )
+        ):
+            return (
+                "Answer using any laptop lifecycle, replacement, buyback, "
+                "or end-of-life periods found in the policy context. Do not "
+                "look for a calendar date unless the policy context provides "
+                "one."
+            )
+
+        return None
 
     def _try_general_gemini_answer(
         self,
@@ -334,6 +435,63 @@ class PolicyChatbot:
             answer,
             "Sources: Gemini general knowledge; not from PCL policy.",
         )
+
+    def _try_direct_policy_answer(
+        self,
+        *,
+        message: str,
+        sources: list[SourceReference],
+    ) -> str | None:
+        normalized_message = message.lower()
+
+        if not (
+            "rto" in normalized_message
+            or "rpo" in normalized_message
+            or "recovery time objective" in normalized_message
+            or "recovery point objective" in normalized_message
+        ):
+            return None
+
+        context = "\n".join(
+            source.snippet or ""
+            for source in sources
+        )
+        normalized_context = context.lower()
+
+        if (
+            "recovery time objective" not in normalized_context
+            or "recovery point objective" not in normalized_context
+        ):
+            return None
+
+        lines = [
+            "RTO = Recovery Time Objective",
+            "",
+            "RPO = Recovery Point Objective",
+        ]
+
+        if "disaster recovery" in normalized_message:
+            testing_match = re.search(
+                r"disaster recovery procedures shall be tested annually[^.]*",
+                context,
+                flags=re.IGNORECASE,
+            )
+            testing_text = (
+                testing_match.group(0).strip()
+                if testing_match
+                else (
+                    "Disaster recovery procedures shall be tested annually "
+                    "by ICT team"
+                )
+            )
+            lines.extend(
+                [
+                    "",
+                    testing_text[0].upper() + testing_text[1:],
+                ]
+            )
+
+        return "\n".join(lines)
 
     def _build_general_prompt(
         self,
@@ -392,45 +550,236 @@ class PolicyChatbot:
     def _build_policy_reference_notice(
         sources: list[SourceReference],
     ) -> str:
-        document_names: list[str] = []
+        grouped_sources = PolicyChatbot._group_sources_by_document(
+            sources
+        )
+        source_lines: list[str] = []
 
-        for source in sources:
-            name = source.document_name.strip()
-            cleaned_name = re.sub(
-                r"\.[^.]+$",
-                "",
-                name,
+        for source in grouped_sources:
+            source_lines.append(
+                format_source_line(
+                    document_name=source.document_name,
+                    pages=source.pages,
+                )
             )
-            cleaned_name = re.sub(
-                r"^\d+\s*-\s*PCL\s*-\s*",
-                "",
-                cleaned_name,
-                flags=re.IGNORECASE,
-            )
-            cleaned_name = re.sub(
-                r"^PCL\s*-\s*",
-                "",
-                cleaned_name,
-                flags=re.IGNORECASE,
-            ).strip()
 
-            page_suffix = (
-                f" (Page {source.page_number})"
-                if source.page_number
-                else ""
-            )
-            label = f"{cleaned_name}{page_suffix}" if cleaned_name else name
-
-            if label and label not in document_names:
-                document_names.append(label)
-
-            if len(document_names) >= 3:
+            if len(source_lines) >= PolicyChatbot.MAX_DISPLAYED_SOURCES:
                 break
 
-        if not document_names:
+        if not source_lines:
             return "Sources: PCL policy knowledge base."
 
-        return "Sources: " + "; ".join(document_names) + "."
+        return "Sources:\n" + "\n".join(source_lines)
+
+    @staticmethod
+    def _group_sources_by_document(
+        sources: list[SourceReference],
+    ) -> list[SourceReference]:
+        grouped: dict[str, SourceReference] = {}
+        page_sets: dict[str, set[int]] = {}
+
+        for source in sources:
+            key = source_document_key(
+                document_name=source.document_name,
+                document_number=source.document_number,
+            )
+
+            if key not in grouped:
+                grouped[key] = SourceReference(
+                    document_name=source.document_name,
+                    document_number=source.document_number,
+                    title=(
+                        source.title
+                        or source_title_without_number(
+                            source.document_name
+                        )
+                    ),
+                    display_title=(
+                        source.display_title
+                        or normalize_source_title(
+                            source.document_name
+                        )
+                    ),
+                    section=source.section,
+                    pages=[],
+                    relevance_score=source.relevance_score,
+                    snippet=source.snippet,
+                    chunk_id=source.chunk_id,
+                    similarity_score=source.similarity_score,
+                )
+                page_sets[key] = set()
+
+            grouped_source = grouped[key]
+
+            if (
+                source.relevance_score is not None
+                and (
+                    grouped_source.relevance_score is None
+                    or source.relevance_score
+                    > grouped_source.relevance_score
+                )
+            ):
+                grouped_source.relevance_score = source.relevance_score
+                grouped_source.similarity_score = source.relevance_score
+
+            for page in source.pages:
+                if page > 0:
+                    page_sets[key].add(page)
+
+            if source.page_number and source.page_number > 0:
+                page_sets[key].add(source.page_number)
+
+        for key, grouped_source in grouped.items():
+            grouped_source.pages = sorted(page_sets[key])
+            grouped_source.page_number = (
+                grouped_source.pages[0]
+                if grouped_source.pages
+                else None
+            )
+            grouped_source.page = grouped_source.page_number
+
+        return list(grouped.values())
+
+    def _select_answer_sources(
+        self,
+        *,
+        sources: list[SourceReference],
+        answer: str,
+    ) -> list[SourceReference]:
+        answer_terms = self._important_terms(answer)
+        selected: list[SourceReference] = []
+        seen: set[tuple[str, int | None]] = set()
+
+        for source in sources:
+            source_text = " ".join(
+                value
+                for value in [
+                    source.section,
+                    source.snippet,
+                ]
+                if value
+            )
+            source_terms = self._important_terms(source_text)
+            overlap = answer_terms & source_terms
+
+            if len(overlap) < 2:
+                continue
+
+            key = source_dedup_key(
+                document_name=source.document_name,
+                document_number=source.document_number,
+                page_number=source.page_number,
+            )
+
+            if key in seen:
+                continue
+
+            seen.add(key)
+            selected.append(source)
+
+            if len(selected) >= self.MAX_DISPLAYED_SOURCES:
+                break
+
+        return selected or sources[: self.MAX_DISPLAYED_SOURCES]
+
+    def _select_policy_context_sources(
+        self,
+        *,
+        message: str,
+        sources: list[SourceReference],
+    ) -> list[SourceReference]:
+        if not self._interpreted_policy_question(message):
+            return sources
+
+        lifecycle_terms = {
+            "buyback",
+            "expiry",
+            "lifecycle",
+            "replacement",
+            "reassignment",
+            "tier 1",
+            "tier 2",
+        }
+        selected = [
+            source
+            for source in sources
+            if any(
+                term in (source.snippet or "").lower()
+                for term in lifecycle_terms
+            )
+        ]
+
+        return selected or sources
+
+    @staticmethod
+    def _log_retrieved_chunks(
+        sources: list[SourceReference],
+    ) -> None:
+        logger.info("Retrieved chunks:")
+
+        for source in sources:
+            logger.info(
+                "Document=%s Page=%s Similarity score=%s",
+                source.document_name,
+                source.page_number
+                if source.page_number
+                else "unavailable",
+                source.relevance_score,
+            )
+
+    @staticmethod
+    def _log_final_answer_source(
+        source_type: str,
+    ) -> None:
+        logger.info(
+            "Final answer came from: %s",
+            source_type,
+        )
+
+    @staticmethod
+    def _important_terms(text: str) -> set[str]:
+        stop_words = {
+            "about",
+            "after",
+            "based",
+            "before",
+            "between",
+            "cables",
+            "company",
+            "context",
+            "document",
+            "employee",
+            "employees",
+            "from",
+            "information",
+            "laptop",
+            "laptops",
+            "oneassist",
+            "pakistan",
+            "policy",
+            "provided",
+            "regarding",
+            "section",
+            "shall",
+            "source",
+            "that",
+            "their",
+            "there",
+            "these",
+            "this",
+            "with",
+        }
+
+        normalized = re.sub(
+            r"[^a-z0-9\s]",
+            " ",
+            text.lower(),
+        )
+        return {
+            word
+            for word in normalized.split()
+            if len(word) >= 4 and word not in stop_words
+        }
 
     def _handle_gemini_error(
         self,
@@ -559,6 +908,12 @@ class PolicyChatbot:
 
         answer = re.sub(
             r"\[\s*/\s*bullet\s*\]",
+            "[/BULLET]",
+            answer,
+            flags=re.IGNORECASE,
+        )
+        answer = re.sub(
+            r"\[\s*/\s*bul\w*\s*\]",
             "[/BULLET]",
             answer,
             flags=re.IGNORECASE,

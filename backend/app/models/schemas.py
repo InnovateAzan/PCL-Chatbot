@@ -1,7 +1,7 @@
 from datetime import datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator, model_validator
 
 
 class ChatRequest(BaseModel):
@@ -32,11 +32,37 @@ class ChatRequest(BaseModel):
 
 class SourceReference(BaseModel):
     document_name: str
+    document_number: str | None = None
+    title: str | None = None
+    display_title: str | None = None
     section: str | None = None
-    page_number: int | None = None
-    snippet: str | None = None
-    chunk_id: str | None = None
-    similarity_score: float | None = None
+    pages: list[int] = Field(default_factory=list)
+    page_number: int | None = Field(default=None, exclude=True)
+    page: int | None = Field(default=None, exclude=True)
+    relevance_score: float | None = None
+    snippet: str | None = Field(default=None, exclude=True)
+    chunk_id: str | None = Field(default=None, exclude=True)
+    similarity_score: float | None = Field(default=None, exclude=True)
+
+    @model_validator(mode="after")
+    def populate_compatible_source_fields(self):
+        if self.page is None:
+            self.page = self.page_number
+        if self.page_number is None:
+            self.page_number = self.page
+        page_values = [
+            page
+            for page in self.pages
+            if isinstance(page, int) and page > 0
+        ]
+        if self.page_number and self.page_number > 0:
+            page_values.append(self.page_number)
+        self.pages = sorted(set(page_values))
+        if self.relevance_score is None:
+            self.relevance_score = self.similarity_score
+        if self.similarity_score is None:
+            self.similarity_score = self.relevance_score
+        return self
 
 
 class ChatResponse(BaseModel):

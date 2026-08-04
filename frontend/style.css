@@ -1075,6 +1075,7 @@ body.embed-mode .feedback-modal::-webkit-scrollbar {
   font-weight: 700;
 }
 
+.sources-list,
 .source-list {
   margin: 0;
   padding-left: 18px;
@@ -1085,6 +1086,8 @@ body.embed-mode .feedback-modal::-webkit-scrollbar {
   color: #756e79;
   font-size: 14px;
   line-height: 1.5;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .source-item:last-child {

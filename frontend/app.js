@@ -243,17 +243,13 @@ function appendMessage(
 
   bubble.appendChild(body);
 
-  const formattedNotice = buildSourcesNotice(
+  const noticeElement = buildNoticeElement(
     sources,
     meta.notice,
   );
 
-  if (role === "bot" && formattedNotice) {
-    const note = document.createElement("p");
-    note.className = "message-note";
-    note.textContent = formattedNotice;
-
-    bubble.appendChild(note);
+  if (role === "bot" && noticeElement) {
+    bubble.appendChild(noticeElement);
   }
 
   article.appendChild(bubble);
@@ -528,53 +524,93 @@ function normalizeAssistantAnswer(answer) {
 
 function formatSourceLabel(source) {
   const rawName = String(
+    source?.display_title ||
+    source?.displayTitle ||
+    source?.title ||
     source?.document_name ||
     source?.documentName ||
     "Unknown policy"
   );
   const policyName = rawName
     .replace(/\.[^.]+$/i, "")
-    .replace(/^\d+\s*-\s*PCL\s*-\s*/i, "")
-    .replace(/^PCL\s*-\s*/i, "")
     .replace(/\s+/g, " ")
     .trim();
 
-  const pageNumber = source?.page_number ?? source?.pageNumber;
-  const section = source?.section ?? source?.sectionName;
+  const pages = Array.isArray(source?.pages)
+    ? source.pages
+        .map((page) => Number(page))
+        .filter((page) => Number.isInteger(page) && page > 0)
+    : [];
+  const uniquePages = [...new Set(pages)].sort((a, b) => a - b);
+  const pageNumber = source?.page ?? source?.page_number ?? source?.pageNumber;
+  const pageLabel = uniquePages.length > 1
+    ? `Pages ${uniquePages.join(", ")}`
+    : uniquePages.length === 1
+      ? `Page ${uniquePages[0]}`
+      : pageNumber
+        ? `Page ${pageNumber}`
+        : "Page unavailable";
 
-  if (pageNumber) {
-    return `${policyName} (Page ${pageNumber})`;
-  }
-
-  if (section) {
-    return `${policyName} (Page not indexed; ${section})`;
-  }
-
-  return `${policyName} (Page not indexed)`;
+  return `${policyName} — ${pageLabel}`;
 }
 
-function buildSourcesNotice(sources, fallbackNotice) {
+function buildNoticeElement(sources, fallbackNotice) {
   if (Array.isArray(sources) && sources.length > 0) {
-    const uniqueLabels = [];
+    const uniqueSources = [];
+    const seen = new Set();
 
     sources.forEach((source) => {
       const label = formatSourceLabel(source);
+      const rawName = String(
+        source?.document_number ||
+        source?.documentNumber ||
+        source?.display_title ||
+        source?.displayTitle ||
+        source?.title ||
+        source?.document_name ||
+        source?.documentName ||
+        "Unknown policy"
+      ).toLowerCase();
+      const key = rawName;
 
-      if (label && !uniqueLabels.includes(label)) {
-        uniqueLabels.push(label);
+      if (label && !seen.has(key)) {
+        seen.add(key);
+        uniqueSources.push(label);
       }
     });
 
-    if (uniqueLabels.length > 0) {
-      return `Sources: ${uniqueLabels.join("; ")}.`;
+    if (uniqueSources.length > 0) {
+      const wrapper = document.createElement("div");
+      wrapper.className = "sources";
+
+      const title = document.createElement("div");
+      title.className = "sources-title";
+      title.textContent = "Sources:";
+      wrapper.appendChild(title);
+
+      const list = document.createElement("ul");
+      list.className = "sources-list";
+
+      uniqueSources.forEach((label) => {
+        const item = document.createElement("li");
+        item.className = "source-item";
+        item.textContent = label;
+        list.appendChild(item);
+      });
+
+      wrapper.appendChild(list);
+      return wrapper;
     }
   }
 
   if (fallbackNotice) {
-    return String(fallbackNotice);
+    const note = document.createElement("p");
+    note.className = "message-note";
+    note.textContent = String(fallbackNotice);
+    return note;
   }
 
-  return "";
+  return null;
 }
 
 function createFeedbackBar(assistantMessageId) {

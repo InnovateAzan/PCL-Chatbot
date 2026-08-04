@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import tempfile
 import traceback
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Callable, Iterator
 
@@ -46,6 +46,22 @@ except ImportError:
 
 
 @dataclass
+class LoadedPage:
+    """Text extracted from one source page."""
+
+    document_name: str
+    page_number: int
+    text: str
+    extraction_method: str
+
+    def to_metadata(self) -> dict[str, str | int]:
+        return {
+            "document_name": self.document_name,
+            "page_number": self.page_number,
+        }
+
+
+@dataclass
 class LoadedDocument:
     """Represents text extracted from one document."""
 
@@ -57,8 +73,9 @@ class LoadedDocument:
     status: str
     loader_used: str
     error: str | None = None
+    pages: list[LoadedPage] = field(default_factory=list)
 
-    def to_dict(self) -> dict[str, str | None]:
+    def to_dict(self) -> dict:
         return asdict(self)
 
 
@@ -232,9 +249,18 @@ class DocumentLoader:
         loader_used = "unknown"
 
         try:
+            loaded_pages: list[LoadedPage] = []
+
             if loader:
                 loader_used = loader.__name__
-                extracted_text = loader(path)
+                if extension in self.PDF_EXTENSIONS:
+                    loaded_pages = self._load_pdf_pages(path)
+                    extracted_text = "\n\n".join(
+                        page.text
+                        for page in loaded_pages
+                    )
+                else:
+                    extracted_text = loader(path)
 
             elif self.use_tika_fallback:
                 loader_used = "apache-tika"
@@ -261,6 +287,7 @@ class DocumentLoader:
                 status="success",
                 loader_used=loader_used,
                 error=None,
+                pages=loaded_pages,
             )
 
         except Exception as error:
@@ -353,6 +380,15 @@ class DocumentLoader:
     # ---------------------------------------------------------
 
     def _load_pdf(self, path: Path) -> str:
+        return "\n\n".join(
+            page.text
+            for page in self._load_pdf_pages(path)
+        )
+
+    def _load_pdf_pages(
+        self,
+        path: Path,
+    ) -> list[LoadedPage]:
         if fitz is None:
             raise RuntimeError(
                 "PyMuPDF is not installed. "
@@ -360,7 +396,7 @@ class DocumentLoader:
             )
 
         document = fitz.open(str(path))
-        extracted_pages: list[str] = []
+        extracted_pages: list[LoadedPage] = []
 
         try:
             for page_number, page in enumerate(
@@ -388,16 +424,25 @@ class DocumentLoader:
                         )
 
                 if text.strip():
-                    extracted_pages.append(
+                    page_text = (
                         f"[Page {page_number} | "
                         f"{extraction_method}]\n"
                         f"{text.strip()}"
                     )
 
+                    extracted_pages.append(
+                        LoadedPage(
+                            document_name=path.name,
+                            page_number=page_number,
+                            text=page_text,
+                            extraction_method=extraction_method,
+                        )
+                    )
+
         finally:
             document.close()
 
-        return "\n\n".join(extracted_pages)
+        return extracted_pages
 
     def _ocr_pdf_page(self, page) -> str:
         """Apply OCR to one PDF page."""

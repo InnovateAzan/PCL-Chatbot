@@ -20,6 +20,13 @@ except ImportError:
 
 from backend.app.models.schemas import SourceReference
 from backend.app.services.document_loader import DocumentLoader
+from backend.app.services.source_utils import (
+    extract_document_number,
+    normalize_source_title,
+    safe_int,
+    source_dedup_key,
+    source_title_without_number,
+)
 
 
 @dataclass
@@ -28,12 +35,26 @@ class PolicyChunk:
 
     chunk_id: str
     document_name: str
+    document_number: str
+    normalized_title: str
     file_path: str
     file_hash: str
     page_number: int | None
+    section_number: str | None
+    section_title: str | None
     section: str | None
+    source_type: str
     text: str
     chunk_index: int
+
+
+@dataclass
+class PageSection:
+    """A same-page policy section used to preserve metadata in chunks."""
+
+    section_number: str | None
+    section_title: str | None
+    text: str
 
 
 class PolicyRetriever:
@@ -51,7 +72,7 @@ class PolicyRetriever:
     """
 
     COLLECTION_NAME = "pakistan_cables_policies"
-    INDEX_FORMAT_VERSION = 2
+    INDEX_FORMAT_VERSION = 5
 
     PAGE_PATTERN = re.compile(
         r"\[Page\s+(\d+)(?:\s*\|\s*[^\]]+)?\]",
@@ -65,6 +86,10 @@ class PolicyRetriever:
         r")"
     )
 
+    SECTION_HEADING_PATTERN = re.compile(
+        r"^\s*(\d{1,2}(?:\.\d{1,2})*)[.)]?\s+(.{3,180})$"
+    )
+
     def __init__(
         self,
         policies_folder: str | Path | None = None,
@@ -73,6 +98,7 @@ class PolicyRetriever:
         chunk_size: int = 900,
         chunk_overlap: int = 150,
         top_k: int = 5,
+        relevance_threshold: float = 0.20,
         auto_index: bool = True,
     ) -> None:
         if chromadb is None:
@@ -110,6 +136,10 @@ class PolicyRetriever:
             min(chunk_overlap, self.chunk_size // 2),
         )
         self.top_k = max(top_k, 1)
+        self.relevance_threshold = max(
+            0.0,
+            min(relevance_threshold, 1.0),
+        )
 
         self.chroma_folder.mkdir(
             parents=True,
@@ -196,7 +226,7 @@ class PolicyRetriever:
         )[0]
 
         fetch_count = min(
-            max(result_limit * 4, 10),
+            max(result_limit * 6, 20),
             max(self.collection.count(), 1),
         )
 
@@ -210,44 +240,44 @@ class PolicyRetriever:
             ],
         )
 
-        documents = self._first_result_list(
-            results.get("documents")
+        candidate_records = self._semantic_candidate_records(
+            results
         )
-        ids = self._first_result_list(
-            results.get("ids")
-        )
-        metadatas = self._first_result_list(
-            results.get("metadatas")
-        )
-        distances = self._first_result_list(
-            results.get("distances")
+        candidate_records.extend(
+            self._keyword_candidate_records(
+                normalized_query
+            )
         )
 
         ranked_results: list[
             tuple[float, SourceReference]
         ] = []
+        seen_candidate_ids: set[str] = set()
 
-        for index, document_text in enumerate(documents):
+        for candidate in candidate_records:
+            candidate_id = str(candidate.get("id") or "")
+
+            if candidate_id and candidate_id in seen_candidate_ids:
+                continue
+
+            if candidate_id:
+                seen_candidate_ids.add(candidate_id)
+
+            document_text = str(
+                candidate.get("document") or ""
+            )
+
             if not document_text:
                 continue
 
             metadata = (
-                metadatas[index]
-                if index < len(metadatas)
-                and isinstance(metadatas[index], dict)
+                candidate.get("metadata")
+                if isinstance(candidate.get("metadata"), dict)
                 else {}
             )
 
-            distance = (
-                float(distances[index])
-                if index < len(distances)
-                and distances[index] is not None
-                else 1.0
-            )
-
-            semantic_score = max(
-                0.0,
-                min(1.0, 1.0 - distance),
+            semantic_score = float(
+                candidate.get("semantic_score") or 0.0
             )
 
             document_name = str(
@@ -266,6 +296,10 @@ class PolicyRetriever:
                 normalized_query,
                 document_text,
             )
+            exact_match_score = self._exact_phrase_score(
+                normalized_query,
+                document_text,
+            )
             policy_intent_score = self._policy_intent_score(
                 normalized_query,
                 document_name,
@@ -273,9 +307,10 @@ class PolicyRetriever:
             )
 
             final_score = (
-                semantic_score * 0.45
+                semantic_score * 0.35
                 + filename_score * 0.20
-                + keyword_score * 0.10
+                + keyword_score * 0.15
+                + exact_match_score * 0.15
                 + policy_intent_score * 0.25
             )
 
@@ -286,29 +321,43 @@ class PolicyRetriever:
             ):
                 continue
 
-            page_number = self._safe_int(
+            page_number = safe_int(
                 metadata.get("page_number")
             )
+            document_number = str(
+                metadata.get("document_number")
+                or extract_document_number(document_name)
+                or ""
+            ).strip() or None
 
             section = str(
-                metadata.get("section") or ""
+                metadata.get("section_name")
+                or metadata.get("section")
+                or ""
             ).strip() or None
+
+            if final_score < self.relevance_threshold:
+                continue
 
             source = SourceReference(
                 document_name=document_name,
+                document_number=document_number,
+                title=source_title_without_number(
+                    document_name
+                ),
+                display_title=normalize_source_title(
+                    document_name
+                ),
                 section=section,
                 page_number=page_number,
+                page=page_number,
                 snippet=self._make_snippet(
                     document_text,
                     normalized_query,
                 ),
-                chunk_id=(
-                    str(ids[index])
-                    if index < len(ids)
-                    and ids[index] is not None
-                    else None
-                ),
+                chunk_id=candidate_id or None,
                 similarity_score=round(final_score, 4),
+                relevance_score=round(final_score, 4),
             )
 
             ranked_results.append(
@@ -539,52 +588,82 @@ class PolicyRetriever:
         chunks: list[PolicyChunk] = []
         chunk_index = 0
 
-        normalized_title = self._normalize_filename(
+        normalized_title = source_title_without_number(
             document_name
+        )
+        document_number = extract_document_number(
+            document_name
+        ) or ""
+        source_type = (
+            Path(document_name)
+            .suffix
+            .lower()
+            .lstrip(".")
+            or "unknown"
         )
 
         for page_number, page_text in page_sections:
-            page_chunks = self._chunk_text(
+            page_section_blocks = self._split_page_into_sections(
                 page_text
             )
 
-            current_section: str | None = None
-
-            for chunk_text in page_chunks:
-                detected_section = (
-                    self._detect_section(chunk_text)
+            for section_block in page_section_blocks:
+                page_chunks = self._chunk_text(
+                    section_block.text
                 )
 
-                if detected_section:
-                    current_section = detected_section
-
-                # Add document title to every chunk.
-                searchable_text = (
-                    f"Document title: {normalized_title}\n"
-                    f"File name: {document_name}\n"
-                    f"{chunk_text}"
+                section_label = self._format_section_label(
+                    section_block.section_number,
+                    section_block.section_title,
                 )
 
-                chunk_id = self._build_chunk_id(
-                    file_path=file_path,
-                    file_hash=file_hash,
-                    chunk_index=chunk_index,
-                )
+                for chunk_text in page_chunks:
+                    # Add document title and section to every chunk.
+                    searchable_parts = [
+                        f"Document title: {normalized_title}",
+                        f"File name: {document_name}",
+                    ]
 
-                chunks.append(
-                    PolicyChunk(
-                        chunk_id=chunk_id,
-                        document_name=document_name,
+                    if section_label:
+                        searchable_parts.append(
+                            f"Section: {section_label}"
+                        )
+
+                    searchable_parts.append(chunk_text)
+
+                    searchable_text = "\n".join(
+                        searchable_parts
+                    )
+
+                    chunk_id = self._build_chunk_id(
                         file_path=file_path,
                         file_hash=file_hash,
-                        page_number=page_number,
-                        section=current_section,
-                        text=searchable_text,
                         chunk_index=chunk_index,
                     )
-                )
 
-                chunk_index += 1
+                    chunks.append(
+                        PolicyChunk(
+                            chunk_id=chunk_id,
+                            document_name=document_name,
+                            document_number=document_number,
+                            normalized_title=normalized_title,
+                            file_path=file_path,
+                            file_hash=file_hash,
+                            page_number=page_number,
+                            section_number=(
+                                section_block.section_number
+                            ),
+                            section_title=(
+                                section_block.section_title
+                            ),
+                            section=section_label,
+                            source_type=source_type,
+                            text=searchable_text,
+                            chunk_index=chunk_index,
+                        )
+                    )
+
+                    chunk_index += 1
 
         return chunks
 
@@ -622,6 +701,111 @@ class PolicyRetriever:
                 )
 
         return pages or [(None, text.strip())]
+
+    def _split_page_into_sections(
+        self,
+        page_text: str,
+    ) -> list[PageSection]:
+        cleaned_text = self._clean_text(page_text)
+
+        if not cleaned_text:
+            return []
+
+        sections: list[PageSection] = []
+        current_number: str | None = None
+        current_title: str | None = None
+        current_lines: list[str] = []
+
+        for line in cleaned_text.splitlines():
+            stripped_line = line.strip()
+
+            if not stripped_line:
+                if current_lines:
+                    current_lines.append("")
+                continue
+
+            heading_match = self._match_section_heading(
+                stripped_line
+            )
+
+            if heading_match:
+                if current_lines:
+                    section_text = "\n".join(
+                        current_lines
+                    ).strip()
+                    if section_text:
+                        sections.append(
+                            PageSection(
+                                section_number=current_number,
+                                section_title=current_title,
+                                text=section_text,
+                            )
+                        )
+
+                current_number, current_title = heading_match
+                current_lines = [stripped_line]
+                continue
+
+            current_lines.append(stripped_line)
+
+        if current_lines:
+            section_text = "\n".join(
+                current_lines
+            ).strip()
+            if section_text:
+                sections.append(
+                    PageSection(
+                        section_number=current_number,
+                        section_title=current_title,
+                        text=section_text,
+                    )
+                )
+
+        if sections:
+            return sections
+
+        return [
+            PageSection(
+                section_number=None,
+                section_title=None,
+                text=cleaned_text,
+            )
+        ]
+
+    def _match_section_heading(
+        self,
+        line: str,
+    ) -> tuple[str | None, str] | None:
+        match = self.SECTION_HEADING_PATTERN.match(line)
+
+        if match:
+            section_number = match.group(1).strip()
+            section_title = match.group(2).strip(" :-\t")
+
+            if (
+                section_title
+                and len(section_title.split()) <= 18
+            ):
+                return section_number, section_title
+
+        if (
+            self.SECTION_PATTERN.match(line)
+            and line.upper() == line
+            and len(line.split()) <= 12
+        ):
+            return None, line.strip(" :-\t")
+
+        return None
+
+    @staticmethod
+    def _format_section_label(
+        section_number: str | None,
+        section_title: str | None,
+    ) -> str | None:
+        if section_number and section_title:
+            return f"{section_number} {section_title}"
+
+        return section_title or section_number
 
     def _chunk_text(
         self,
@@ -791,6 +975,12 @@ class PolicyRetriever:
                     "document_name": (
                         chunk.document_name
                     ),
+                    "document_number": (
+                        chunk.document_number
+                    ),
+                    "normalized_title": (
+                        chunk.normalized_title
+                    ),
                     "file_path": chunk.file_path,
                     "file_hash": chunk.file_hash,
                     "page_number": (
@@ -798,12 +988,27 @@ class PolicyRetriever:
                         if chunk.page_number is not None
                         else -1
                     ),
+                    "source_type": (
+                        chunk.source_type
+                    ),
+                    "section_number": (
+                        chunk.section_number or ""
+                    ),
+                    "section_title": (
+                        chunk.section_title or ""
+                    ),
                     "section": (
                         chunk.section or ""
+                    ),
+                    "section_name": (
+                        chunk.section_title
+                        or chunk.section
+                        or ""
                     ),
                     "chunk_index": (
                         chunk.chunk_index
                     ),
+                    "chunk_id": chunk.chunk_id,
                 }
                 for chunk in batch
             ]
@@ -861,6 +1066,181 @@ class PolicyRetriever:
     # =========================================================
     # Ranking
     # =========================================================
+
+    def _semantic_candidate_records(
+        self,
+        results: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        documents = self._first_result_list(
+            results.get("documents")
+        )
+        ids = self._first_result_list(
+            results.get("ids")
+        )
+        metadatas = self._first_result_list(
+            results.get("metadatas")
+        )
+        distances = self._first_result_list(
+            results.get("distances")
+        )
+
+        candidates: list[dict[str, Any]] = []
+
+        for index, document_text in enumerate(documents):
+            distance = (
+                float(distances[index])
+                if index < len(distances)
+                and distances[index] is not None
+                else 1.0
+            )
+            semantic_score = max(
+                0.0,
+                min(1.0, 1.0 - distance),
+            )
+
+            candidates.append(
+                {
+                    "id": (
+                        ids[index]
+                        if index < len(ids)
+                        else None
+                    ),
+                    "document": document_text,
+                    "metadata": (
+                        metadatas[index]
+                        if index < len(metadatas)
+                        else {}
+                    ),
+                    "semantic_score": semantic_score,
+                }
+            )
+
+        return candidates
+
+    def _keyword_candidate_records(
+        self,
+        normalized_query: str,
+    ) -> list[dict[str, Any]]:
+        try:
+            result = self.collection.get(
+                include=[
+                    "documents",
+                    "metadatas",
+                ],
+            )
+        except Exception as error:
+            print(
+                f"Keyword candidate scan skipped: {error}"
+            )
+            return []
+
+        ids = result.get("ids") or []
+        documents = result.get("documents") or []
+        metadatas = result.get("metadatas") or []
+        candidates: list[dict[str, Any]] = []
+
+        for index, document_text in enumerate(documents):
+            if not document_text:
+                continue
+
+            keyword_score = self._keyword_match_score(
+                normalized_query,
+                document_text,
+            )
+            exact_match_score = self._exact_phrase_score(
+                normalized_query,
+                document_text,
+            )
+
+            if keyword_score <= 0 and exact_match_score <= 0:
+                continue
+
+            candidates.append(
+                {
+                    "id": (
+                        ids[index]
+                        if index < len(ids)
+                        else None
+                    ),
+                    "document": document_text,
+                    "metadata": (
+                        metadatas[index]
+                        if index < len(metadatas)
+                        else {}
+                    ),
+                    "semantic_score": max(
+                        0.35,
+                        exact_match_score * 0.55,
+                        keyword_score * 0.45,
+                    ),
+                }
+            )
+
+        return candidates
+
+    def _exact_phrase_score(
+        self,
+        query: str,
+        document: str,
+    ) -> float:
+        normalized_document = self._normalize_text(
+            document
+        )
+        phrases = self._important_query_phrases(query)
+
+        if not phrases:
+            return 0.0
+
+        matches = [
+            phrase
+            for phrase in phrases
+            if phrase in normalized_document
+        ]
+
+        return len(matches) / len(phrases)
+
+    @staticmethod
+    def _important_query_phrases(
+        query: str,
+    ) -> list[str]:
+        phrase_aliases = {
+            "rto": "recovery time objective",
+            "rpo": "recovery point objective",
+            "mfa": "multi factor authentication",
+            "rbac": "role based access control",
+            "ceo": "chief executive officer",
+        }
+        phrases: list[str] = []
+        query_words = set(query.split())
+
+        for acronym, expansion in phrase_aliases.items():
+            if acronym in query_words:
+                phrases.append(acronym)
+                phrases.append(expansion)
+
+        for phrase in [
+            "disaster recovery",
+            "backup",
+            "recovery time objective",
+            "recovery point objective",
+            "multi factor authentication",
+            "role based access control",
+            "chief executive officer",
+        ]:
+            if phrase in query:
+                phrases.append(phrase)
+
+        seen: set[str] = set()
+        unique_phrases: list[str] = []
+
+        for phrase in phrases:
+            if phrase in seen:
+                continue
+
+            seen.add(phrase)
+            unique_phrases.append(phrase)
+
+        return unique_phrases
 
     def _filename_match_score(
         self,
@@ -940,6 +1320,11 @@ class PolicyRetriever:
             "asset",
             "device",
             "pool laptop",
+            "expiry",
+            "expire",
+            "expiration",
+            "lifecycle",
+            "replacement",
         }
 
         if any(term in query for term in endpoint_terms):
@@ -956,6 +1341,31 @@ class PolicyRetriever:
             if "hardware procurement" in normalized_name:
                 return 0.15
 
+        removable_media_terms = {
+            "external drive",
+            "external drives",
+            "usb",
+            "removable",
+            "media",
+            "personal laptop",
+            "personal device",
+            "personal devices",
+        }
+
+        if any(term in query for term in removable_media_terms):
+            if "acceptable use" in normalized_name:
+                return 1.0
+
+            if "asset endpoint management" in normalized_name:
+                return 0.95
+
+            if (
+                "external drive" in normalized_document
+                or "removable media" in normalized_document
+                or "personal device" in normalized_document
+            ):
+                return 0.9
+
         procurement_terms = {
             "procurement",
             "purchase",
@@ -967,6 +1377,33 @@ class PolicyRetriever:
         if any(term in query for term in procurement_terms):
             if "hardware procurement" in normalized_name:
                 return 1.0
+
+        disaster_recovery_terms = {
+            "backup",
+            "disaster",
+            "recovery",
+            "rto",
+            "rpo",
+            "recovery time objective",
+            "recovery point objective",
+        }
+
+        if any(
+            term in query
+            for term in disaster_recovery_terms
+        ):
+            if (
+                "backup" in normalized_name
+                and "disaster recovery" in normalized_name
+            ):
+                return 1.0
+
+            if (
+                "recovery time objective" in normalized_document
+                or "recovery point objective" in normalized_document
+                or "disaster recovery procedures" in normalized_document
+            ):
+                return 0.35
 
         return 0.0
 
@@ -1036,13 +1473,13 @@ class PolicyRetriever:
         limit: int,
     ) -> list[SourceReference]:
         sources: list[SourceReference] = []
-        seen: set[tuple[str, int | None, str]] = set()
+        seen: set[tuple[str, int | None]] = set()
 
         for _, source in ranked_results:
-            key = (
-                source.document_name.lower(),
-                source.page_number,
-                source.snippet[:120].lower(),
+            key = source_dedup_key(
+                document_name=source.document_name,
+                document_number=source.document_number,
+                page_number=source.page_number,
             )
 
             if key in seen:
