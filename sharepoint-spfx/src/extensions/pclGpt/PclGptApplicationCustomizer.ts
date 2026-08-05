@@ -1,6 +1,6 @@
 import { BaseApplicationCustomizer } from "@microsoft/sp-application-base";
 
-const WIDGET_VERSION = "onedesk-assistant-v2";
+const WIDGET_VERSION = "20260805-3";
 const DEFAULT_CHATBOT_URL = "http://127.0.0.1:5500/?embed=1";
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8085/api";
 
@@ -38,6 +38,11 @@ export default class PclGptApplicationCustomizer
     console.log("OneDesk Assistant extension loaded");
     console.log("Current path:", currentPath);
     console.log("Expected path:", expectedPath);
+    console.log("OneDesk Assistant SPFx version:", {
+      widgetVersion: WIDGET_VERSION,
+      chatbotUrl: this.properties.chatbotUrl || DEFAULT_CHATBOT_URL,
+      apiBaseUrl: this.properties.apiBaseUrl || DEFAULT_API_BASE_URL,
+    });
 
     if (!isOneDeskPage) {
       console.log("OneDesk Assistant hidden because this is not One Desk.");
@@ -312,14 +317,20 @@ export default class PclGptApplicationCustomizer
         window.location.href
       );
 
+      url.searchParams.set("v", WIDGET_VERSION);
       url.searchParams.set("embed", "1");
       url.searchParams.set("apiBase", apiBaseUrl);
-      url.searchParams.set("v", WIDGET_VERSION);
       url.searchParams.set(
         "parentOrigin",
         window.location.origin
       );
       this.appendUserContext(url);
+
+      console.log("OneDesk Assistant iframe URL:", {
+        url: url.toString(),
+        apiBaseUrl,
+        widgetVersion: WIDGET_VERSION,
+      });
 
       return url.toString();
     } catch {

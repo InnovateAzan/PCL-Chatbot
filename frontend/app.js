@@ -1,6 +1,7 @@
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8085/api";
 const LOCAL_PROFILE_STORAGE_KEY = "oneassist.localProfile";
 const ACTIVE_SESSION_STORAGE_PREFIX = "oneassist.activeSessionId";
+window.ONEASSIST_BUILD_VERSION = "2026-08-05-v3";
 
 const runtimeConfig = getRuntimeConfig();
 const API_BASE_URL = runtimeConfig.apiBaseUrl;
@@ -39,6 +40,15 @@ let initializingUserPromise = null;
 let ensuringSessionPromise = null;
 let typingIndicatorElement = null;
 const renderedMessageKeys = new Set();
+let backendReadyPromise = null;
+
+console.info("OneDesk Assistant frontend version:", {
+  version: window.ONEASSIST_BUILD_VERSION,
+  apiBaseUrl: API_BASE_URL,
+  origin: window.location.origin,
+  embedMode: EMBED_MODE,
+  hostedMode: HOSTED_MODE,
+});
 
 document.body.classList.toggle("embed-mode", EMBED_MODE);
 document.body.classList.toggle("hosted-mode", HOSTED_MODE);
@@ -51,7 +61,7 @@ if (HOSTED_MODE) {
 
 setWidgetOpen(DEFAULT_OPEN);
 updateFeedbackSubmitState();
-prepareActiveSession().catch((error) => {
+ensureBackendReady().then(() => prepareActiveSession()).catch((error) => {
   console.error("Active chat session initialization error:", error);
 });
 
@@ -111,6 +121,7 @@ chatForm?.addEventListener("submit", async (event) => {
   showTypingIndicator();
 
   try {
+    await ensureBackendReady();
     let user = null;
     let sessionId = currentSessionId || "";
     let historyEnabled = false;
@@ -126,7 +137,15 @@ chatForm?.addEventListener("submit", async (event) => {
       );
     }
 
-    const response = await fetch(`${API_BASE_URL}/chat`, {
+    const chatEndpoint = `${API_BASE_URL}/chat`;
+    console.info("OneDesk Assistant chat request:", {
+      apiUrl: API_BASE_URL,
+      endpoint: "/chat",
+      url: chatEndpoint,
+      version: window.ONEASSIST_BUILD_VERSION,
+    });
+
+    const response = await fetch(chatEndpoint, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -146,20 +165,9 @@ chatForm?.addEventListener("submit", async (event) => {
     });
 
     if (!response.ok) {
-      let errorMessage = "Chat request failed.";
-
-      try {
-        const errorPayload = await response.json();
-
-        if (errorPayload?.detail) {
-          errorMessage = String(errorPayload.detail);
-        }
-      } catch {
-        // Use the default error message.
-      }
-
-      throw new Error(errorMessage);
+      throw await buildApiResponseError(response, "/chat");
     }
+
 
     const payload = await response.json();
     persistResponseSession(payload);
@@ -179,23 +187,10 @@ chatForm?.addEventListener("submit", async (event) => {
   } catch (error) {
     console.error("Chat request error:", error);
     removeTypingIndicator();
-    const errorText = String(
-      error?.message || ""
-    ).trim();
-    const fallbackMessage = HOSTED_MODE
-      ? (
-        `The assistant could not complete the request. `
-        + `Backend: ${API_BASE_URL}. `
-        + `Reason: ${errorText || "Unknown error."}`
-      )
-      : (
-        "The assistant could not reach the backend. "
-        + "Please make sure the API server is running."
-      );
 
     appendMessage(
       "bot",
-      fallbackMessage
+      formatApiErrorMessage(error)
     );
   } finally {
     removeTypingIndicator();
@@ -206,6 +201,98 @@ chatForm?.addEventListener("submit", async (event) => {
 
 messageInput?.addEventListener("input", autoResizeTextarea);
 messageInput?.addEventListener("keydown", handleComposerKeydown);
+
+function ensureBackendReady() {
+  if (backendReadyPromise) {
+    return backendReadyPromise;
+  }
+
+  const healthEndpoint = `${API_BASE_URL}/health`;
+  console.info("OneDesk Assistant health check:", {
+    apiUrl: API_BASE_URL,
+    endpoint: "/health",
+    url: healthEndpoint,
+    version: window.ONEASSIST_BUILD_VERSION,
+  });
+
+  backendReadyPromise = fetch(healthEndpoint, {
+    method: "GET",
+    headers: {
+      "Accept": "application/json",
+    },
+  }).then(async (response) => {
+    console.info("OneDesk Assistant health response:", {
+      apiUrl: API_BASE_URL,
+      endpoint: "/health",
+      status: response.status,
+      version: window.ONEASSIST_BUILD_VERSION,
+    });
+
+    if (!response.ok) {
+      throw await buildApiResponseError(response, "/health");
+    }
+
+    return true;
+  }).catch((error) => {
+    backendReadyPromise = null;
+    throw error;
+  });
+
+  return backendReadyPromise;
+}
+
+async function buildApiResponseError(response, endpoint) {
+  let backendDetail = "";
+  let backendBody = "";
+
+  try {
+    const payload = await response.clone().json();
+    if (payload?.detail) {
+      backendDetail = String(payload.detail);
+    }
+  } catch {
+    try {
+      backendBody = await response.text();
+    } catch {
+      backendBody = "";
+    }
+  }
+
+  const error = new Error(
+    backendDetail ||
+      backendBody ||
+      `Backend request failed with HTTP ${response.status}.`
+  );
+  error.apiUrl = API_BASE_URL;
+  error.endpoint = endpoint;
+  error.statusCode = response.status;
+  error.backendDetail = backendDetail || backendBody;
+  return error;
+}
+
+function formatApiErrorMessage(error) {
+  const statusCode = error?.statusCode;
+  const endpoint = error?.endpoint || "/chat";
+  const backendDetail = String(error?.backendDetail || error?.message || "").trim();
+
+  if (statusCode) {
+    return (
+      "The assistant could not complete the backend request.\n\n"
+      + `API URL: ${API_BASE_URL}\n`
+      + `Endpoint: ${endpoint}\n`
+      + `Status: ${statusCode}\n`
+      + `Backend detail: ${backendDetail || "No detail returned."}`
+    );
+  }
+
+  return (
+    "The assistant could not reach the backend.\n\n"
+    + `API URL: ${API_BASE_URL}\n`
+    + `Endpoint: ${endpoint}\n`
+    + `Status: network error\n`
+    + `Backend detail: ${backendDetail || "No response received."}`
+  );
+}
 
 function appendMessage(
   role,
@@ -606,11 +693,23 @@ function buildNoticeElement(sources, fallbackNotice) {
   if (fallbackNotice) {
     const note = document.createElement("p");
     note.className = "message-note";
-    note.textContent = String(fallbackNotice);
+    note.textContent = sanitizeDisplayedNotice(fallbackNotice);
     return note;
   }
 
   return null;
+}
+
+function sanitizeDisplayedNotice(notice) {
+  const nonPolicyPhrase = new RegExp(
+    String.raw`\s*;?\s*${["not from PCL", "policy"].join(" ")}\.?`,
+    "gi"
+  );
+
+  return String(notice || "")
+    .replace(nonPolicyPhrase, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
 }
 
 function createFeedbackBar(assistantMessageId) {

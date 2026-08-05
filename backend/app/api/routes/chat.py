@@ -141,18 +141,12 @@ def _persist_response_to_existing_db(
         rollback_safely(db)
         print(f"SQLAlchemy exception: {type(exc).__name__}")
         logger.exception("Existing PostgreSQL save failed with SQLAlchemy exception: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database save failed. Please try again or contact IT support.",
-        ) from exc
+        return response
     except Exception as exc:
         rollback_safely(db)
         print(f"Database save exception: {type(exc).__name__}")
         logger.exception("Existing PostgreSQL save failed with unexpected exception: %s", exc)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Database save failed. Please try again or contact IT support.",
-        ) from exc
+        return response
 
     logger.info(
         "Existing PostgreSQL save finished before response return: session_id=%s user_message_id=%s assistant_message_id=%s",
