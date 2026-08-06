@@ -38,10 +38,12 @@ class EntraTokenValidator:
         if self.settings.azure_tenant_id and tenant_id != self.settings.azure_tenant_id:
             raise AuthenticationError("Token tenant does not match configured tenant.")
 
+        preferred_username = claims.get("preferred_username")
+        upn = claims.get("upn")
         email = (
             claims.get("email")
-            or claims.get("preferred_username")
-            or claims.get("upn")
+            or preferred_username
+            or upn
             or ""
         ).lower()
         if not email:
@@ -55,6 +57,8 @@ class EntraTokenValidator:
             email=email,
             display_name=claims.get("name") or email,
             preferred_name=claims.get("given_name"),
+            upn=upn,
+            preferred_username=preferred_username,
             roles=roles,
         )
 

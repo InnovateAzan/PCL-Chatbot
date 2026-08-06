@@ -41,6 +41,9 @@ let ensuringSessionPromise = null;
 let typingIndicatorElement = null;
 const renderedMessageKeys = new Set();
 let backendReadyPromise = null;
+let apiAccessToken = "";
+let apiAccessTokenExpiresAt = 0;
+let apiAccessTokenPromise = null;
 
 console.info("OneDesk Assistant frontend version:", {
   version: window.ONEASSIST_BUILD_VERSION,
@@ -149,6 +152,7 @@ chatForm?.addEventListener("submit", async (event) => {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
+        ...(await getApiAuthorizationHeader()),
         ...(historyEnabled
           ? { "X-OneAssist-User-Id": String(user.userId) }
           : {}),
@@ -199,6 +203,21 @@ chatForm?.addEventListener("submit", async (event) => {
   }
 });
 
+window.addEventListener("message", (event) => {
+  if (runtimeConfig.parentOrigin && event.origin !== runtimeConfig.parentOrigin) {
+    return;
+  }
+
+  const payload = event.data || {};
+  if (payload.type !== "pcl-gpt:api-token") {
+    return;
+  }
+
+  apiAccessToken = String(payload.accessToken || "");
+  const expiresIn = Number(payload.expiresIn || 300);
+  apiAccessTokenExpiresAt = Date.now() + Math.max(30, expiresIn - 30) * 1000;
+});
+
 messageInput?.addEventListener("input", autoResizeTextarea);
 messageInput?.addEventListener("keydown", handleComposerKeydown);
 
@@ -239,6 +258,58 @@ function ensureBackendReady() {
   });
 
   return backendReadyPromise;
+}
+
+async function getApiAuthorizationHeader() {
+  const token = await getApiAccessToken();
+  return token ? { "Authorization": `Bearer ${token}` } : {};
+}
+
+async function getApiAccessToken() {
+  if (apiAccessToken && Date.now() < apiAccessTokenExpiresAt) {
+    return apiAccessToken;
+  }
+
+  if (!runtimeConfig.parentOrigin || window.parent === window) {
+    return "";
+  }
+
+  if (apiAccessTokenPromise) {
+    return apiAccessTokenPromise;
+  }
+
+  apiAccessTokenPromise = new Promise((resolve) => {
+    const timeout = window.setTimeout(() => {
+      window.removeEventListener("message", handler);
+      resolve("");
+    }, 5000);
+
+    function handler(event) {
+      if (event.origin !== runtimeConfig.parentOrigin) {
+        return;
+      }
+      const payload = event.data || {};
+      if (payload.type !== "pcl-gpt:api-token") {
+        return;
+      }
+      window.clearTimeout(timeout);
+      window.removeEventListener("message", handler);
+      apiAccessToken = String(payload.accessToken || "");
+      const expiresIn = Number(payload.expiresIn || 300);
+      apiAccessTokenExpiresAt = Date.now() + Math.max(30, expiresIn - 30) * 1000;
+      resolve(apiAccessToken);
+    }
+
+    window.addEventListener("message", handler);
+    window.parent.postMessage(
+      { type: "pcl-gpt:api-token-request" },
+      runtimeConfig.parentOrigin
+    );
+  }).finally(() => {
+    apiAccessTokenPromise = null;
+  });
+
+  return apiAccessTokenPromise;
 }
 
 async function buildApiResponseError(response, endpoint) {

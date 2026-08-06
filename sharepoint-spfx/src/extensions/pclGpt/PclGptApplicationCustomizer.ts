@@ -3,12 +3,26 @@ import { BaseApplicationCustomizer } from "@microsoft/sp-application-base";
 const WIDGET_VERSION = "20260805-3";
 const DEFAULT_CHATBOT_URL = "http://127.0.0.1:5500/?embed=1";
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8085/api";
+const DEFAULT_API_RESOURCE = "api://befd94d3-9bc9-414f-81ec-a89a041384f7";
 
 export interface IPclGptApplicationCustomizerProperties {
   enabled?: boolean;
   chatbotUrl?: string;
   apiBaseUrl?: string;
+  apiResource?: string;
   oneDeskPath?: string;
+}
+
+interface IAadTokenProvider {
+  getToken(resource: string): Promise<string>;
+}
+
+interface IAadTokenProviderFactory {
+  getTokenProvider(): Promise<IAadTokenProvider>;
+}
+
+interface ITokenAwareContext {
+  aadTokenProviderFactory?: IAadTokenProviderFactory;
 }
 
 export default class PclGptApplicationCustomizer
@@ -415,13 +429,76 @@ export default class PclGptApplicationCustomizer
 
     if (
       messageType !== "pcl-gpt:close" &&
-      messageType !== "PCL_GPT_CLOSE"
+      messageType !== "PCL_GPT_CLOSE" &&
+      messageType !== "pcl-gpt:api-token-request"
     ) {
+      return;
+    }
+
+    if (messageType === "pcl-gpt:api-token-request") {
+      this.sendApiToken(event).catch((error) => {
+        console.error(
+          "OneDesk Assistant token message handling failed.",
+          error
+        );
+      });
       return;
     }
 
     this.closePanel();
   };
+
+  private async sendApiToken(event: MessageEvent): Promise<void> {
+    const frameWindow = this.getFrameWindow();
+
+    if (!frameWindow || event.source !== frameWindow) {
+      return;
+    }
+
+    try {
+      const tokenFactory = (this.context as unknown as ITokenAwareContext)
+        .aadTokenProviderFactory;
+      if (!tokenFactory) {
+        throw new Error("AadTokenProviderFactory is not available.");
+      }
+
+      const provider = await tokenFactory.getTokenProvider();
+      const resource =
+        this.properties.apiResource ||
+        DEFAULT_API_RESOURCE;
+      const token = await provider.getToken(resource);
+
+      frameWindow.postMessage(
+        {
+          type: "pcl-gpt:api-token",
+          accessToken: token,
+          expiresIn: 300,
+        },
+        event.origin
+      );
+    } catch (error) {
+      console.error(
+        "OneDesk Assistant could not acquire API token.",
+        error
+      );
+      frameWindow.postMessage(
+        {
+          type: "pcl-gpt:api-token",
+          accessToken: "",
+          expiresIn: 0,
+        },
+        event.origin
+      );
+    }
+  }
+
+  private getFrameWindow(): Window | null {
+    const iframe = document.getElementById(
+      "pcl-gpt-frame"
+    ) as HTMLIFrameElement | null;
+
+    return iframe?.contentWindow || null;
+  }
 
   private handleEscapeKey = (
     event: KeyboardEvent

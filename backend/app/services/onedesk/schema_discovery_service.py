@@ -9,6 +9,7 @@ from backend.app.integrations.microsoft.sharepoint_client import (
     SharePointClient,
 )
 from backend.app.services.onedesk.field_mapping import get_it_service_desk_field_mapping
+from backend.app.services.onedesk.field_mapping import get_live_it_ticket_field_mapping
 
 
 class OneDeskSchemaDiscoveryService:
@@ -44,6 +45,8 @@ class OneDeskSchemaDiscoveryService:
         list_id = str(list_info.get("id") or "")
         columns = await self.client.get_list_columns(site_id, list_id)
         content_types = await self.client.get_list_content_types(site_id, list_id)
+        formatted_columns = [self._format_column(column) for column in columns]
+        live_mapping = get_live_it_ticket_field_mapping(formatted_columns)
 
         return {
             "mode": self.mode,
@@ -56,7 +59,9 @@ class OneDeskSchemaDiscoveryService:
             "listId": list_id,
             "listDisplayName": list_info.get("displayName"),
             "configuredFieldMapping": get_it_service_desk_field_mapping(),
-            "columns": [self._format_column(column) for column in columns],
+            "liveTicketFieldMappingSuggestion": live_mapping.__dict__,
+            "liveTicketMissingRequiredMappings": live_mapping.missing_required,
+            "columns": formatted_columns,
             "contentTypes": [_safe_public_dict(item) for item in content_types],
         }
 

@@ -31,6 +31,7 @@ from backend.app.repositories.existing_postgres import (
 )
 from backend.app.services.chat_history import ChatHistoryService
 from backend.app.services.chatbot import PolicyChatbot
+from backend.app.services.onedesk.ticket_service import OneDeskService
 
 router = APIRouter(tags=["chat"])
 logger = logging.getLogger(__name__)
@@ -39,6 +40,11 @@ logger = logging.getLogger(__name__)
 @lru_cache
 def get_chatbot() -> PolicyChatbot:
     return PolicyChatbot()
+
+
+@lru_cache
+def get_onedesk_service() -> OneDeskService:
+    return OneDeskService()
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -50,11 +56,24 @@ async def chat(
 ) -> ChatResponse:
     if not x_oneassist_user_id:
         started = time.perf_counter()
-        response = get_chatbot().answer(
-            payload.message,
-            user_display_name=payload.resolved_display_name,
-            preferred_name=payload.preferred_name,
+        access_token = (
+            authorization.split(" ", 1)[1].strip()
+            if authorization and authorization.lower().startswith("bearer ")
+            else None
         )
+        onedesk = get_onedesk_service()
+        if onedesk.should_handle(payload.message):
+            response = await onedesk.answer(
+                message=payload.message,
+                user_email="",
+                access_token=access_token,
+            )
+        else:
+            response = get_chatbot().answer(
+                payload.message,
+                user_display_name=payload.resolved_display_name,
+                preferred_name=payload.preferred_name,
+            )
         response_time_ms = round((time.perf_counter() - started) * 1000)
 
         return _persist_response_to_existing_db(
