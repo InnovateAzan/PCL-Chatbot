@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from backend.app.models.chat_history import Base
 from backend.app.models.schemas import UserInitializeRequest
+from backend.app.models.schemas import ChatResponse, SourceReference
 from backend.app.services.chat_history import ChatHistoryService, UserService
 from backend.app.services.chatbot import PolicyChatbot
 
@@ -114,3 +115,68 @@ async def test_message_save_assistant_response_save_and_personalized_greeting(
     assert total == 2
     assert [message.role for message in messages] == ["USER", "ASSISTANT"]
     assert messages[1].message_text == response.answer
+
+
+@pytest.mark.asyncio
+async def test_session_policy_context_is_passed_to_follow_up(db_session):
+    class ContextAwareChatbot(PolicyChatbot):
+        def __init__(self):
+            self.seen_contexts = []
+
+        def answer(
+            self,
+            message,
+            user_display_name=None,
+            preferred_name=None,
+            active_policy_context=None,
+        ):
+            self.seen_contexts.append(active_policy_context)
+            document_number = (
+                active_policy_context.get("document_number")
+                if active_policy_context
+                else "0040"
+            )
+            return ChatResponse(
+                answer="Policy answer",
+                sources=[
+                    SourceReference(
+                        document_name=(
+                            "0040 - PCL - AI Governance Policy.pdf"
+                        ),
+                        document_number=document_number,
+                        title="PCL - AI Governance Policy",
+                        page_number=1,
+                        relevance_score=0.9,
+                    )
+                ],
+                provider="policy-rules",
+                active_policy_context={
+                    "document_number": document_number,
+                    "title": "PCL - AI Governance Policy",
+                    "document_name": (
+                        "0040 - PCL - AI Governance Policy.pdf"
+                    ),
+                    "keywords": ["AI Governance"],
+                    "pages": [1],
+                    "last_question": message,
+                },
+            )
+
+    user = await UserService(db_session).initialize_user(user_payload())
+    chatbot = ContextAwareChatbot()
+    service = ChatHistoryService(db_session, chatbot)
+    chat_session = await service.create_session(user=user, title=None)
+
+    await service.answer(
+        user=user,
+        session_id=chat_session.id,
+        message="What is AI Governance?",
+    )
+    await service.answer(
+        user=user,
+        session_id=chat_session.id,
+        message="How can I implement it?",
+    )
+
+    assert chatbot.seen_contexts[0] is None
+    assert chatbot.seen_contexts[1]["document_number"] == "0040"

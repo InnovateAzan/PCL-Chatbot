@@ -12,8 +12,10 @@
           "properties": {
             "enabled": true,
             "chatbotUrl": "http://127.0.0.1:5500/embed.html",
-            "apiBaseUrl": "http://127.0.0.1:8085/api",
-            "oneDeskPath": "/SitePages/Onedesk.aspx"
+            "apiBaseUrl": "https://volley-facial-lumpish.ngrok-free.dev/api",
+            "apiResource": "api://befd94d3-9bc9-414f-81ec-a89a041384f7",
+            "oneDeskPath": "/SitePages/Onedesk.aspx",
+            "enableClientDebugLogs": true
           }
         }
       }
@@ -26,8 +28,10 @@
           "properties": {
             "enabled": true,
             "chatbotUrl": "http://127.0.0.1:5500/embed.html",
-            "apiBaseUrl": "http://127.0.0.1:8085/api",
-            "oneDeskPath": "/SitePages/Onedesk.aspx"
+            "apiBaseUrl": "https://volley-facial-lumpish.ngrok-free.dev/api",
+            "apiResource": "api://befd94d3-9bc9-414f-81ec-a89a041384f7",
+            "oneDeskPath": "/SitePages/Onedesk.aspx",
+            "enableClientDebugLogs": true
           }
         }
       }

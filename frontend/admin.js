@@ -40,7 +40,11 @@ async function loadDashboard() {
 
 async function getJson(path) {
   const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: adminHeaders,
+    headers:
+      window.ONEASSIST_BUILD_TRANSPORT_HEADERS?.(
+        adminHeaders,
+        API_BASE_URL
+      ) || adminHeaders,
   });
 
   if (!response.ok) {

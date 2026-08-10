@@ -12,6 +12,15 @@ class Settings(BaseSettings):
     environment: str = "development"
     api_prefix: str = "/api"
     log_level: str = "INFO"
+    log_file: str = "logs/oneassist.log"
+    log_error_file: str = "logs/oneassist-error.log"
+    log_max_bytes: int = 10_485_760
+    log_backup_count: int = 5
+    log_json: bool = False
+    enable_client_debug_logs: bool = True
+    log_user_messages: bool = False
+    log_policy_content: bool = False
+    log_ticket_content: bool = False
     frontend_origins: str = ""
     frontend_origin: str = "http://127.0.0.1:5500"
     sharepoint_origin: str = "https://pakistancable.sharepoint.com"
@@ -21,6 +30,7 @@ class Settings(BaseSettings):
     database_url: str = ""
     db_pool_size: int = 5
     db_max_overflow: int = 10
+    enable_database: bool = True
     azure_tenant_id: str = ""
     azure_client_id: str = ""
     azure_client_secret: str = ""

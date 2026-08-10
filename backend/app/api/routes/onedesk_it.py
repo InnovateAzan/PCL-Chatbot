@@ -5,6 +5,7 @@ from typing import Awaitable, TypeVar
 from fastapi import APIRouter, Depends, Header, HTTPException, status
 
 from backend.app.integrations.microsoft.graph_errors import GraphConfigurationError
+from backend.app.security.auth_diagnostics import public_auth_message
 from backend.app.security.dependencies import get_authenticated_user
 from backend.app.security.entra_auth import AuthenticatedUser
 from backend.app.services.onedesk.it_ticket_service import (
@@ -110,12 +111,26 @@ async def _run(awaitable: Awaitable[T]) -> T:
     except ItTicketPermissionError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Your Microsoft session is invalid or expired.",
+            detail=public_auth_message(str(exc) or "graph_permission_denied"),
         ) from exc
-    except (ItTicketConfigurationError, GraphConfigurationError) as exc:
+    except GraphConfigurationError as exc:
+        code = getattr(exc, "code", None)
+        if code:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=(
+                    f"{public_auth_message('obo_failed')} "
+                    f"Safe Microsoft error: {code}."
+                ),
+            ) from exc
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="The IT Service Desk integration is not fully configured.",
+        ) from exc
+    except ItTicketConfigurationError as exc:
+         raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"IT Service Desk configuration error: {str(exc)}",
         ) from exc
     except ItTicketTemporaryError as exc:
         raise HTTPException(

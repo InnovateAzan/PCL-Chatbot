@@ -5,3 +5,4 @@ __pycache__/
 *.db
 chroma_db/
 .pytest_cache/
+logs/

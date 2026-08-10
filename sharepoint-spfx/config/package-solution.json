@@ -3,10 +3,16 @@
   "solution": {
     "name": "pcl-gpt-client-side-solution",
     "id": "ba31ea3f-152e-4236-8cbf-6e9c42a050b4",
-    "version": "1.0.0.0",
+    "version": "1.0.0.1",
     "includeClientSideAssets": true,
     "skipFeatureDeployment": true,
     "isDomainIsolated": false,
+    "webApiPermissionRequests": [
+      {
+        "resource": "OneDesk Chat Assistant",
+        "scope": "access_as_user"
+      }
+    ],
     "developer": {
       "name": "",
       "websiteUrl": "",
@@ -30,7 +36,7 @@
         "title": "Application Extension - Deployment of custom action",
         "description": "Deploys a custom action with ClientSideComponentId association",
         "id": "1ac65cdd-cee5-4cce-b691-00d225cb4ffb",
-        "version": "1.0.0.0",
+        "version": "1.0.0.1",
         "assets": {
           "elementManifests": [
             "elements.xml",

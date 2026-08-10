@@ -1,7 +1,8 @@
 from functools import lru_cache
 import logging
 import time
-from uuid import UUID
+from datetime import UTC, datetime
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 from sqlalchemy.exc import SQLAlchemyError
@@ -9,10 +10,12 @@ from sqlalchemy.orm import Session
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.dependencies import get_current_user
+from backend.app.core.config import get_settings
 from backend.app.core.database import AsyncSessionLocal
 from backend.app.core.database import get_db_session
 from backend.app.core.existing_database import SessionLocal as ExistingSessionLocal
 from backend.app.core.existing_database import get_db as get_existing_db
+from backend.app.core.logging_config import log_event
 from backend.app.models.chat_history import ChatbotUser
 from backend.app.models.schemas import (
     ChatMessageResponse,
@@ -52,8 +55,9 @@ async def chat(
     payload: ChatRequest,
     x_oneassist_user_id: int | None = Header(default=None),
     authorization: str | None = Header(default=None),
-    existing_db: Session = Depends(get_existing_db),
+    existing_db: Session | None = Depends(get_existing_db),
 ) -> ChatResponse:
+    settings = get_settings()
     if not x_oneassist_user_id:
         started = time.perf_counter()
         access_token = (
@@ -62,13 +66,22 @@ async def chat(
             else None
         )
         onedesk = get_onedesk_service()
+        log_event(
+            logger,
+            "chat_request_received",
+            session_id=payload.session_id or payload.session_uuid,
+            authenticated_user_id=None,
+            message_length=len(payload.message),
+        )
         if onedesk.should_handle(payload.message):
+            log_event(logger, "chat_route_selected", route="ticket")
             response = await onedesk.answer(
                 message=payload.message,
                 user_email="",
                 access_token=access_token,
             )
         else:
+            log_event(logger, "chat_route_selected", route="policy_rag")
             response = get_chatbot().answer(
                 payload.message,
                 user_display_name=payload.resolved_display_name,
@@ -77,6 +90,7 @@ async def chat(
         response_time_ms = round((time.perf_counter() - started) * 1000)
 
         return _persist_response_to_existing_db(
+            enable_database=settings.enable_database,
             db=existing_db,
             payload=payload,
             response=response,
@@ -87,6 +101,38 @@ async def chat(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Initialize the user before sending session chat messages.",
+        )
+
+    if not settings.enable_database:
+        started = time.perf_counter()
+        access_token = (
+            authorization.split(" ", 1)[1].strip()
+            if authorization and authorization.lower().startswith("bearer ")
+            else None
+        )
+        onedesk = get_onedesk_service()
+        if onedesk.should_handle(payload.message):
+            response = await onedesk.answer(
+                message=payload.message,
+                user_email=payload.user_email or "",
+                access_token=access_token,
+            )
+        else:
+            response = get_chatbot().answer(
+                payload.message,
+                user_display_name=payload.resolved_display_name,
+                preferred_name=payload.preferred_name,
+            )
+        response_time_ms = round((time.perf_counter() - started) * 1000)
+        return _persist_response_to_existing_db(
+            enable_database=False,
+            db=existing_db,
+            payload=payload,
+            response=response,
+            response_time_ms=response_time_ms,
+            fallback_user_email=payload.user_email,
+            fallback_display_name=payload.resolved_display_name,
+            fallback_department=payload.department,
         )
 
     if AsyncSessionLocal is None:
@@ -105,6 +151,13 @@ async def chat(
             )
 
         started = time.perf_counter()
+        log_event(
+            logger,
+            "chat_request_received",
+            session_id=payload.session_id,
+            authenticated_user_id=current_user.id,
+            message_length=len(payload.message),
+        )
         response = await ChatHistoryService(
             db_session,
             get_chatbot(),
@@ -121,6 +174,7 @@ async def chat(
         response_time_ms = round((time.perf_counter() - started) * 1000)
 
         return _persist_response_to_existing_db(
+            enable_database=settings.enable_database,
             db=existing_db,
             payload=payload,
             response=response,
@@ -133,7 +187,8 @@ async def chat(
 
 def _persist_response_to_existing_db(
     *,
-    db: Session,
+    enable_database: bool,
+    db: Session | None,
     payload: ChatRequest,
     response: ChatResponse,
     response_time_ms: int,
@@ -141,8 +196,18 @@ def _persist_response_to_existing_db(
     fallback_display_name: str | None = None,
     fallback_department: str | None = None,
 ) -> ChatResponse:
+    if not enable_database or db is None:
+        return response
+
     logger.info("Existing PostgreSQL save dependency injected: %s", type(db).__name__)
-    logger.info("Existing PostgreSQL save starting before response return.")
+    log_event(
+        logger,
+        "persistence_started",
+        target="existing_postgres",
+        session_id=payload.session_uuid
+        or (str(payload.session_id) if payload.session_id else None),
+        response_provider=response.provider,
+    )
 
     try:
         persisted = persist_chat_best_effort(
@@ -158,20 +223,32 @@ def _persist_response_to_existing_db(
         )
     except SQLAlchemyError as exc:
         rollback_safely(db)
-        print(f"SQLAlchemy exception: {type(exc).__name__}")
-        logger.exception("Existing PostgreSQL save failed with SQLAlchemy exception: %s", exc)
+        log_event(
+            logger,
+            "database_save_failed",
+            level=logging.ERROR,
+            error_code="DATABASE_SAVE_FAILED",
+            exception_type=type(exc).__name__,
+        )
         return response
     except Exception as exc:
         rollback_safely(db)
-        print(f"Database save exception: {type(exc).__name__}")
-        logger.exception("Existing PostgreSQL save failed with unexpected exception: %s", exc)
+        log_event(
+            logger,
+            "database_save_failed",
+            level=logging.ERROR,
+            error_code="DATABASE_SAVE_FAILED",
+            exception_type=type(exc).__name__,
+        )
         return response
 
-    logger.info(
-        "Existing PostgreSQL save finished before response return: session_id=%s user_message_id=%s assistant_message_id=%s",
-        persisted.session_id,
-        persisted.user_message_id,
-        persisted.assistant_message_id,
+    log_event(
+        logger,
+        "persistence_completed",
+        target="existing_postgres",
+        session_id=persisted.session_id,
+        user_message_id=persisted.user_message_id,
+        assistant_message_id=persisted.assistant_message_id,
     )
     return response.model_copy(
         update={
@@ -187,8 +264,26 @@ def _persist_response_to_existing_db(
 async def create_chat_session(
     payload: CreateChatSessionRequest | None = None,
     current_user: ChatbotUser = Depends(get_current_user),
-    db_session: AsyncSession = Depends(get_db_session),
+    db_session: AsyncSession | None = Depends(get_db_session),
 ) -> CreateChatSessionResponse:
+    if not get_settings().enable_database:
+        now = datetime.now(UTC)
+        session_id = uuid4()
+        return CreateChatSessionResponse(
+            session_id=session_id,
+            session=ChatSessionResponse(
+                id=session_id,
+                user_id=current_user.id,
+                title=payload.title if payload else None,
+                status="ACTIVE",
+                started_at=now,
+                ended_at=None,
+                message_count=0,
+                created_at=now,
+                updated_at=now,
+            ),
+        )
+
     chat_session = await ChatHistoryService(
         db_session,
         get_chatbot(),
@@ -238,10 +333,7 @@ async def get_chat_session_history(
             detail="user_email is required.",
         )
     if ExistingSessionLocal is None:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="DATABASE_URL is not configured.",
-        )
+        return {"session_uuid": session_uuid, "messages": []}
 
     with ExistingSessionLocal() as db:
         result = ExistingPostgresRepository(db).get_session_with_messages(
@@ -275,8 +367,11 @@ async def list_chat_messages(
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     current_user: ChatbotUser = Depends(get_current_user),
-    db_session: AsyncSession = Depends(get_db_session),
+    db_session: AsyncSession | None = Depends(get_db_session),
 ) -> PaginatedChatMessagesResponse:
+    if not get_settings().enable_database:
+        return PaginatedChatMessagesResponse(items=[], limit=limit, offset=offset, total=0)
+
     items, total = await ChatHistoryService(
         db_session,
         get_chatbot(),
@@ -301,9 +396,23 @@ async def list_chat_messages(
 async def end_chat_session(
     session_id: UUID,
     current_user: ChatbotUser = Depends(get_current_user),
-    db_session: AsyncSession = Depends(get_db_session),
-    existing_db: Session = Depends(get_existing_db),
+    db_session: AsyncSession | None = Depends(get_db_session),
+    existing_db: Session | None = Depends(get_existing_db),
 ) -> ChatSessionResponse:
+    if not get_settings().enable_database:
+        now = datetime.now(UTC)
+        return ChatSessionResponse(
+            id=session_id,
+            user_id=current_user.id,
+            title=None,
+            status="ENDED",
+            started_at=now,
+            ended_at=now,
+            message_count=0,
+            created_at=now,
+            updated_at=now,
+        )
+
     chat_session = await ChatHistoryService(
         db_session,
         get_chatbot(),

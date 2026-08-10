@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import traceback
 from dataclasses import dataclass
@@ -19,6 +20,8 @@ except ImportError:
     SentenceTransformer = None
 
 from backend.app.models.schemas import SourceReference
+from backend.app.core.config import get_settings
+from backend.app.core.logging_config import log_event
 from backend.app.services.document_loader import DocumentLoader
 from backend.app.services.source_utils import (
     extract_document_number,
@@ -27,6 +30,9 @@ from backend.app.services.source_utils import (
     source_dedup_key,
     source_title_without_number,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -55,6 +61,14 @@ class PageSection:
     section_number: str | None
     section_title: str | None
     text: str
+
+
+@dataclass(frozen=True)
+class PolicyIntent:
+    name: str | None
+    confidence: float
+    related_terms: tuple[str, ...] = ()
+    title_boosts: tuple[str, ...] = ()
 
 
 class PolicyRetriever:
@@ -88,6 +102,141 @@ class PolicyRetriever:
 
     SECTION_HEADING_PATTERN = re.compile(
         r"^\s*(\d{1,2}(?:\.\d{1,2})*)[.)]?\s+(.{3,180})$"
+    )
+
+    SYNONYM_MAP: dict[str, tuple[str, ...]] = {
+        "broken": ("damaged", "malfunction", "failure", "repair", "replace"),
+        "damaged": ("broken", "asset damage", "device damage", "hardware damage"),
+        "malfunction": ("not working", "failure", "repair", "replacement"),
+        "failure": ("malfunction", "not working", "hardware failure"),
+        "repair": ("fix", "damaged", "service desk", "replacement"),
+        "replace": ("replacement", "hardware replacement", "new device"),
+        "password": ("credentials", "login", "sign in", "authentication"),
+        "login": ("password", "credentials", "sign in", "authentication"),
+        "usb": ("flash drive", "removable media", "external storage"),
+        "vpn": ("remote access", "secure connection"),
+        "printer": ("printing", "toner", "hardware"),
+        "ai": ("generative ai", "llm", "artificial intelligence"),
+        "laptop": ("device", "endpoint", "it asset", "company laptop"),
+    }
+
+    INTENT_CATALOG: dict[str, dict[str, tuple[str, ...]]] = {
+        "AI Governance": {
+            "terms": ("ai", "artificial intelligence", "generative ai", "llm"),
+            "titles": ("ai governance",),
+        },
+        "VPN": {
+            "terms": ("vpn", "remote access", "secure connection"),
+            "titles": ("remote access", "access control", "information security"),
+        },
+        "Remote Access": {
+            "terms": ("remote access", "vpn", "work from home"),
+            "titles": ("remote access", "access control", "information security"),
+        },
+        "Password Reset": {
+            "terms": ("forgot password", "forgot my password", "password reset", "credentials", "cannot login", "can't login"),
+            "titles": ("access control", "identity management", "password"),
+        },
+        "Account Access": {
+            "terms": ("account", "login", "sign in", "authentication", "access"),
+            "titles": ("access control", "identity management"),
+        },
+        "Asset Damage": {
+            "terms": ("broken laptop", "damaged laptop", "screen cracked", "device damaged", "asset damage", "hardware failure", "laptop not working"),
+            "titles": ("asset endpoint management", "hardware procurement"),
+        },
+        "Asset Loss": {
+            "terms": ("lost laptop", "stolen laptop", "theft", "asset loss", "missing device"),
+            "titles": ("asset endpoint management", "acceptable use", "incident response"),
+        },
+        "Hardware Procurement": {
+            "terms": ("need new laptop", "new laptop", "hardware procurement", "purchase laptop", "buy laptop"),
+            "titles": ("hardware procurement", "software hardware procurement flow"),
+        },
+        "Software Installation": {
+            "terms": ("software", "install", "installation", "application"),
+            "titles": ("software procurement", "acceptable use"),
+        },
+        "Email": {
+            "terms": ("email", "mail", "outlook"),
+            "titles": ("acceptable use", "information security"),
+        },
+        "USB": {
+            "terms": ("usb", "flash drive", "external storage", "removable media"),
+            "titles": ("acceptable use", "asset endpoint management", "information security"),
+        },
+        "Removable Media": {
+            "terms": ("removable media", "external drive", "flash drive", "usb"),
+            "titles": ("acceptable use", "asset endpoint management", "information security"),
+        },
+        "Backup": {
+            "terms": ("backup", "restore"),
+            "titles": ("backup disaster recovery",),
+        },
+        "Disaster Recovery": {
+            "terms": ("disaster recovery", "rto", "rpo", "restore"),
+            "titles": ("backup disaster recovery",),
+        },
+        "Incident Reporting": {
+            "terms": ("incident", "report incident", "security event", "breach"),
+            "titles": ("incident response", "information security"),
+        },
+        "Acceptable Use": {
+            "terms": ("acceptable use", "internet", "personal device", "external drive"),
+            "titles": ("acceptable use",),
+        },
+        "Data Classification": {
+            "terms": ("data classification", "confidential", "restricted data"),
+            "titles": ("information security", "data classification"),
+        },
+        "Data Privacy": {
+            "terms": ("privacy", "personal data", "data protection"),
+            "titles": ("information security", "data privacy"),
+        },
+        "Information Security": {
+            "terms": ("information security", "cybersecurity", "security"),
+            "titles": ("information security",),
+        },
+        "Laptop": {
+            "terms": ("laptop", "endpoint", "device"),
+            "titles": ("asset endpoint management", "hardware procurement"),
+        },
+        "Printer": {
+            "terms": ("printer", "printing", "toner"),
+            "titles": ("hardware procurement", "asset endpoint management"),
+        },
+        "Network": {
+            "terms": ("network", "internet", "connectivity"),
+            "titles": ("information security", "acceptable use"),
+        },
+        "Antivirus": {
+            "terms": ("antivirus", "malware", "virus"),
+            "titles": ("asset endpoint management", "information security"),
+        },
+        "Cloud": {
+            "terms": ("cloud", "sharepoint", "onedrive"),
+            "titles": ("information security", "acceptable use"),
+        },
+        "SharePoint": {
+            "terms": ("sharepoint",),
+            "titles": ("information security", "acceptable use"),
+        },
+        "OneDrive": {
+            "terms": ("onedrive",),
+            "titles": ("information security", "acceptable use"),
+        },
+    }
+
+    FOLLOW_UP_REFERENCES = (
+        "it",
+        "this",
+        "that",
+        "this policy",
+        "that policy",
+        "above",
+        "previous answer",
+        "same policy",
+        "again",
     )
 
     def __init__(
@@ -200,9 +349,11 @@ class PolicyRetriever:
         self,
         query: str,
         limit: int | None = None,
+        active_policy_context: dict[str, Any] | None = None,
     ) -> list[SourceReference]:
         """
-        Search policies using semantic similarity plus filename matching.
+        Search policies using semantic, keyword, title, metadata and
+        intent-aware ranking.
         """
 
         normalized_query = self._normalize_text(query)
@@ -210,7 +361,21 @@ class PolicyRetriever:
         if not normalized_query:
             return []
 
+        intent = self.detect_intent(query)
+        expanded_query = self.expand_query(query, intent=intent)
         result_limit = limit or self.top_k
+        settings = get_settings()
+        query_log: dict[str, Any] = {
+            "query_hash": hashlib.sha256(normalized_query.encode("utf-8")).hexdigest()[:16],
+            "detected_intent": intent.name,
+            "intent_confidence": intent.confidence,
+            "active_policy_present": bool(active_policy_context),
+            "expanded_term_count": len(expanded_query.split()),
+            "query_expansion_applied": expanded_query != normalized_query,
+        }
+        if settings.environment.lower() in {"development", "dev", "local"} and settings.log_user_messages:
+            query_log["original_query"] = query
+        log_event(logger, "policy_retrieval_started", **query_log)
 
         if self.collection.count() == 0:
             print(
@@ -221,8 +386,80 @@ class PolicyRetriever:
         if self.collection.count() == 0:
             return []
 
+        diagnostics: dict[str, Any] = {
+            "original_query": query,
+            "expanded_query": expanded_query,
+            "detected_intent": intent.name,
+            "intent_confidence": intent.confidence,
+            "active_policy_used": bool(active_policy_context),
+            "gemini_used": False,
+            "fallback_reason": None,
+        }
+
+        sources = self._search_once(
+            normalized_query=normalized_query,
+            expanded_query=expanded_query,
+            intent=intent,
+            active_policy_context=active_policy_context,
+            result_limit=result_limit,
+        )
+        first_pass_count = len(sources)
+
+        if not sources and expanded_query != normalized_query:
+            diagnostics["fallback_reason"] = (
+                "first search returned no sources; retried expanded query"
+            )
+            sources = self._search_once(
+                normalized_query=self._normalize_text(expanded_query),
+                expanded_query=expanded_query,
+                intent=intent,
+                active_policy_context=active_policy_context,
+                result_limit=result_limit,
+            )
+            second_pass_used = True
+        else:
+            second_pass_used = False
+
+        self.last_diagnostics = diagnostics | {
+            "retrieved_policies": [
+                source.document_name
+                for source in sources
+            ],
+            "similarity_scores": [
+                source.relevance_score
+                for source in sources
+            ],
+            "policy_boost": intent.title_boosts,
+        }
+        log_event(
+            logger,
+            "policy_retrieval_completed",
+            detected_intent=intent.name,
+            first_pass_results=first_pass_count,
+            second_pass_used=second_pass_used,
+            final_context_chunks=len(sources),
+            retrieved_documents=[
+                source.document_number or source.title or source.document_name
+                for source in sources
+            ],
+            chunk_ids=[source.chunk_id for source in sources],
+            similarity_scores=[source.relevance_score for source in sources],
+            relevance_threshold=self.relevance_threshold,
+        )
+
+        return sources
+
+    def _search_once(
+        self,
+        *,
+        normalized_query: str,
+        expanded_query: str,
+        intent: PolicyIntent,
+        active_policy_context: dict[str, Any] | None,
+        result_limit: int,
+    ) -> list[SourceReference]:
         query_embedding = self._encode_texts(
-            [normalized_query]
+            [expanded_query or normalized_query]
         )[0]
 
         fetch_count = min(
@@ -245,7 +482,7 @@ class PolicyRetriever:
         )
         candidate_records.extend(
             self._keyword_candidate_records(
-                normalized_query
+                expanded_query or normalized_query
             )
         )
 
@@ -288,36 +525,55 @@ class PolicyRetriever:
             )
 
             filename_score = self._filename_match_score(
-                normalized_query,
+                expanded_query,
                 document_name,
             )
 
             keyword_score = self._keyword_match_score(
-                normalized_query,
+                expanded_query,
                 document_text,
             )
             exact_match_score = self._exact_phrase_score(
-                normalized_query,
+                expanded_query,
                 document_text,
             )
             policy_intent_score = self._policy_intent_score(
-                normalized_query,
+                expanded_query,
                 document_name,
                 document_text,
             )
+            title_boost_score = self._title_boost_score(
+                document_name=document_name,
+                metadata=metadata,
+                intent=intent,
+                active_policy_context=active_policy_context,
+            )
+            metadata_score = self._metadata_match_score(
+                expanded_query,
+                metadata,
+            )
+            section_score = self._section_title_score(
+                expanded_query,
+                metadata,
+                intent,
+            )
 
             final_score = (
-                semantic_score * 0.35
-                + filename_score * 0.20
-                + keyword_score * 0.15
-                + exact_match_score * 0.15
-                + policy_intent_score * 0.25
+                semantic_score * 0.30
+                + filename_score * 0.16
+                + keyword_score * 0.14
+                + exact_match_score * 0.12
+                + policy_intent_score * 0.18
+                + title_boost_score * 0.16
+                + metadata_score * 0.08
+                + section_score * 0.10
             )
 
             # Avoid irrelevant generic matches.
             if (
-                final_score < 0.20
+                final_score < 0.18
                 and filename_score < 0.45
+                and title_boost_score < 0.55
             ):
                 continue
 
@@ -1304,6 +1560,232 @@ class PolicyRetriever:
 
         return len(matches) / len(query_words)
 
+    def expand_query(
+        self,
+        query: str,
+        *,
+        intent: PolicyIntent | None = None,
+    ) -> str:
+        normalized_query = self._normalize_text(query)
+        if not normalized_query:
+            return ""
+
+        expanded_terms: list[str] = [normalized_query]
+        query_words = set(normalized_query.split())
+
+        for key, synonyms in self.SYNONYM_MAP.items():
+            normalized_key = self._normalize_text(key)
+            key_words = set(normalized_key.split())
+            if normalized_key in normalized_query or key_words & query_words:
+                expanded_terms.extend(synonyms)
+
+        if intent and intent.name:
+            expanded_terms.append(intent.name)
+            expanded_terms.extend(intent.related_terms)
+            expanded_terms.extend(intent.title_boosts)
+
+        if (
+            "laptop" in query_words
+            and any(
+                term in normalized_query
+                for term in ("broken", "damaged", "cracked", "not working", "failure")
+            )
+        ):
+            expanded_terms.extend(
+                [
+                    "asset damage",
+                    "company laptop damage",
+                    "device malfunction",
+                    "repair",
+                    "replacement",
+                    "it asset",
+                ]
+            )
+
+        if "lost laptop" in normalized_query:
+            expanded_terms.extend(
+                ["loss theft damage", "asset loss", "incident reporting"]
+            )
+
+        seen: set[str] = set()
+        unique_terms: list[str] = []
+
+        for term in expanded_terms:
+            normalized = self._normalize_text(term)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            unique_terms.append(normalized)
+
+        return " ".join(unique_terms)
+
+    def detect_intent(self, query: str) -> PolicyIntent:
+        normalized_query = self._normalize_text(query)
+        if not normalized_query:
+            return PolicyIntent(None, 0.0)
+
+        best_name: str | None = None
+        best_score = 0.0
+        best_terms: tuple[str, ...] = ()
+        best_titles: tuple[str, ...] = ()
+
+        for intent_name, config in self.INTENT_CATALOG.items():
+            terms = config["terms"]
+            titles = config["titles"]
+            matched_terms = [
+                term
+                for term in terms
+                if self._term_matches_query(term, normalized_query)
+            ]
+
+            if not matched_terms:
+                continue
+
+            specific_match_bonus = (
+                0.28
+                if any(" " in term.strip() for term in matched_terms)
+                else 0.0
+            )
+            score = min(
+                1.0,
+                0.42
+                + (len(matched_terms) / max(len(terms), 1))
+                + 0.18
+                + specific_match_bonus,
+            )
+
+            if score > best_score:
+                best_name = intent_name
+                best_score = score
+                best_terms = terms
+                best_titles = titles
+
+        return PolicyIntent(
+            best_name,
+            round(best_score, 4),
+            best_terms,
+            best_titles,
+        )
+
+    def _term_matches_query(
+        self,
+        term: str,
+        normalized_query: str,
+    ) -> bool:
+        normalized_term = self._normalize_text(term)
+        if not normalized_term:
+            return False
+
+        if normalized_term in normalized_query:
+            return True
+
+        term_words = {
+            word
+            for word in normalized_term.split()
+            if len(word) > 2
+        }
+        query_words = set(normalized_query.split())
+
+        if not term_words:
+            return False
+
+        overlap = term_words & query_words
+        if len(term_words) == 1:
+            return bool(overlap)
+
+        return len(overlap) >= max(2, len(term_words) - 1)
+
+    def _title_boost_score(
+        self,
+        *,
+        document_name: str,
+        metadata: dict[str, Any],
+        intent: PolicyIntent,
+        active_policy_context: dict[str, Any] | None,
+    ) -> float:
+        normalized_name = self._normalize_filename(document_name)
+        normalized_title = self._normalize_text(
+            str(metadata.get("normalized_title") or document_name)
+        )
+
+        if active_policy_context:
+            active_number = str(
+                active_policy_context.get("document_number") or ""
+            ).strip()
+            active_title = self._normalize_text(
+                str(active_policy_context.get("title") or "")
+            )
+
+            if active_number and active_number in normalized_name:
+                return 1.0
+
+            if active_title and (
+                active_title in normalized_title
+                or normalized_title in active_title
+            ):
+                return 0.95
+
+        if intent.confidence < 0.55:
+            return 0.0
+
+        for title in intent.title_boosts:
+            normalized_boost = self._normalize_text(title)
+            if normalized_boost and normalized_boost in normalized_name:
+                return 1.0
+            if normalized_boost and normalized_boost in normalized_title:
+                return 0.9
+
+        return 0.0
+
+    def _metadata_match_score(
+        self,
+        query: str,
+        metadata: dict[str, Any],
+    ) -> float:
+        metadata_text = " ".join(
+            str(metadata.get(key) or "")
+            for key in [
+                "document_name",
+                "document_number",
+                "normalized_title",
+                "section",
+                "section_name",
+                "section_title",
+            ]
+        )
+        return self._keyword_match_score(query, metadata_text)
+
+    def _section_title_score(
+        self,
+        query: str,
+        metadata: dict[str, Any],
+        intent: PolicyIntent,
+    ) -> float:
+        section_text = self._normalize_text(
+            " ".join(
+                str(metadata.get(key) or "")
+                for key in ["section", "section_name", "section_title"]
+            )
+        )
+
+        if not section_text:
+            return 0.0
+
+        query_score = self._keyword_match_score(query, section_text)
+        intent_score = 0.0
+
+        if intent.confidence >= 0.55:
+            intent_score = max(
+                (
+                    1.0
+                    if self._normalize_text(term) in section_text
+                    else 0.0
+                )
+                for term in intent.related_terms or ("",)
+            )
+
+        return max(query_score, intent_score)
+
     def _policy_intent_score(
         self,
         query: str,
@@ -1319,6 +1801,11 @@ class PolicyRetriever:
             "endpoint",
             "asset",
             "device",
+            "broken",
+            "damaged",
+            "cracked",
+            "malfunction",
+            "failure",
             "pool laptop",
             "expiry",
             "expire",
@@ -1340,6 +1827,14 @@ class PolicyRetriever:
 
             if "hardware procurement" in normalized_name:
                 return 0.15
+
+            if (
+                "asset damage" in normalized_document
+                or "loss theft or damage" in normalized_document
+                or "device malfunction" in normalized_document
+                or "hardware replacement" in normalized_document
+            ):
+                return 0.85
 
         removable_media_terms = {
             "external drive",
@@ -1372,11 +1867,53 @@ class PolicyRetriever:
             "buy",
             "approval",
             "vendor",
+            "need new",
+            "new laptop",
         }
 
         if any(term in query for term in procurement_terms):
             if "hardware procurement" in normalized_name:
                 return 1.0
+
+        access_terms = {
+            "password",
+            "credentials",
+            "login",
+            "sign in",
+            "authentication",
+            "forgot password",
+            "cannot login",
+            "can t login",
+        }
+
+        if any(term in query for term in access_terms):
+            if "access control" in normalized_name or "identity management" in normalized_name:
+                return 1.0
+            if "password" in normalized_document or "authentication" in normalized_document:
+                return 0.75
+
+        ai_terms = {
+            "ai",
+            "artificial intelligence",
+            "generative ai",
+            "llm",
+        }
+
+        if any(term in query for term in ai_terms):
+            if "ai governance" in normalized_name:
+                return 1.0
+
+        remote_access_terms = {
+            "vpn",
+            "remote access",
+            "secure connection",
+        }
+
+        if any(term in query for term in remote_access_terms):
+            if "access control" in normalized_name or "information security" in normalized_name:
+                return 0.8
+            if "remote access" in normalized_document or "vpn" in normalized_document:
+                return 0.75
 
         disaster_recovery_terms = {
             "backup",

@@ -1,9 +1,11 @@
 import { BaseApplicationCustomizer } from "@microsoft/sp-application-base";
 
-const WIDGET_VERSION = "20260805-3";
-const DEFAULT_CHATBOT_URL = "http://127.0.0.1:5500/?embed=1";
-const DEFAULT_API_BASE_URL = "http://127.0.0.1:8085/api";
+const WIDGET_VERSION = "20260806-1";
+const DEFAULT_CHATBOT_URL = "http://127.0.0.1:5500/embed.html";
+const DEFAULT_API_BASE_URL = "https://volley-facial-lumpish.ngrok-free.dev/api";
 const DEFAULT_API_RESOURCE = "api://befd94d3-9bc9-414f-81ec-a89a041384f7";
+const API_TOKEN_MESSAGE_TYPE = "onedesk-api-token";
+const API_TOKEN_REQUEST_MESSAGE_TYPE = "pcl-gpt:api-token-request";
 
 export interface IPclGptApplicationCustomizerProperties {
   enabled?: boolean;
@@ -11,6 +13,7 @@ export interface IPclGptApplicationCustomizerProperties {
   apiBaseUrl?: string;
   apiResource?: string;
   oneDeskPath?: string;
+  enableClientDebugLogs?: boolean;
 }
 
 interface IAadTokenProvider {
@@ -32,8 +35,10 @@ export default class PclGptApplicationCustomizer
   private launcherButton: HTMLButtonElement | undefined;
   private panel: HTMLDivElement | undefined;
   private overlay: HTMLDivElement | undefined;
+  private debugLogsEnabled = false;
 
   public onInit(): Promise<void> {
+    this.debugLogsEnabled = this.properties.enableClientDebugLogs === true;
     const currentPath = window.location.pathname
       .toLowerCase()
       .replace(/\/+$/, "");
@@ -49,22 +54,25 @@ export default class PclGptApplicationCustomizer
       currentPath === expectedPath ||
       currentPath.indexOf(expectedPath) >= 0;
 
-    console.log("OneDesk Assistant extension loaded");
-    console.log("Current path:", currentPath);
-    console.log("Expected path:", expectedPath);
-    console.log("OneDesk Assistant SPFx version:", {
+    this.logInfo("extension_loaded", {
       widgetVersion: WIDGET_VERSION,
       chatbotUrl: this.properties.chatbotUrl || DEFAULT_CHATBOT_URL,
       apiBaseUrl: this.properties.apiBaseUrl || DEFAULT_API_BASE_URL,
+      currentPath,
+      expectedPath,
+      oneDeskPageMatched: isOneDeskPage,
     });
 
     if (!isOneDeskPage) {
-      console.log("OneDesk Assistant hidden because this is not One Desk.");
+      this.logInfo("extension_hidden_not_on_onedesk_page", {
+        currentPath,
+        expectedPath,
+      });
       return Promise.resolve();
     }
 
     if (this.properties.enabled === false) {
-      console.log("OneDesk Assistant is disabled for SharePoint.");
+      this.logInfo("extension_disabled");
       return Promise.resolve();
     }
 
@@ -79,6 +87,7 @@ export default class PclGptApplicationCustomizer
       "keydown",
       this.handleEscapeKey
     );
+    this.logInfo("launcher_rendered");
 
     return Promise.resolve();
   }
@@ -340,10 +349,11 @@ export default class PclGptApplicationCustomizer
       );
       this.appendUserContext(url);
 
-      console.log("OneDesk Assistant iframe URL:", {
-        url: url.toString(),
+      this.logInfo("iframe_url_prepared", {
+        iframePath: url.pathname,
         apiBaseUrl,
         widgetVersion: WIDGET_VERSION,
+        iframeOrigin: url.origin,
       });
 
       return url.toString();
@@ -415,10 +425,7 @@ export default class PclGptApplicationCustomizer
       window.location.protocol === "https:" &&
       apiBaseUrl.indexOf("https://") !== 0
     ) {
-      console.warn(
-        "OneDesk Assistant apiBaseUrl should be an HTTPS tunnel URL for SharePoint testing.",
-        apiBaseUrl
-      );
+      this.logWarn("insecure_api_base_url", { apiBaseUrl });
     }
   }
 
@@ -430,17 +437,17 @@ export default class PclGptApplicationCustomizer
     if (
       messageType !== "pcl-gpt:close" &&
       messageType !== "PCL_GPT_CLOSE" &&
-      messageType !== "pcl-gpt:api-token-request"
+      messageType !== API_TOKEN_REQUEST_MESSAGE_TYPE
     ) {
       return;
     }
 
-    if (messageType === "pcl-gpt:api-token-request") {
+    if (messageType === API_TOKEN_REQUEST_MESSAGE_TYPE) {
       this.sendApiToken(event).catch((error) => {
-        console.error(
-          "OneDesk Assistant token message handling failed.",
-          error
-        );
+        this.logError("token_message_handling_failed", {
+          errorType: error instanceof Error ? error.name : typeof error,
+          message: error instanceof Error ? error.message : String(error),
+        });
       });
       return;
     }
@@ -452,44 +459,176 @@ export default class PclGptApplicationCustomizer
     const frameWindow = this.getFrameWindow();
 
     if (!frameWindow || event.source !== frameWindow) {
+      this.logWarn("token_request_rejected", {
+        reason: "unexpected_message_source",
+        eventOrigin: event.origin,
+      });
+      return;
+    }
+
+    let expectedOrigin: string;
+
+    try {
+      const iframe = document.getElementById(
+        "pcl-gpt-frame"
+      ) as HTMLIFrameElement | null;
+
+      if (!iframe?.src) {
+        throw new Error("OneDesk iframe URL is unavailable.");
+      }
+
+      expectedOrigin = new URL(iframe.src).origin;
+    } catch (error) {
+      this.logError("iframe_origin_resolution_failed", {
+        errorType: error instanceof Error ? error.name : typeof error,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      return;
+    }
+
+    if (event.origin !== expectedOrigin) {
+      this.logWarn("token_request_rejected", {
+        reason: "unexpected_origin",
+        eventOrigin: event.origin,
+        expectedOrigin,
+      });
       return;
     }
 
     try {
-      const tokenFactory = (this.context as unknown as ITokenAwareContext)
-        .aadTokenProviderFactory;
-      if (!tokenFactory) {
-        throw new Error("AadTokenProviderFactory is not available.");
-      }
-
-      const provider = await tokenFactory.getTokenProvider();
       const resource =
         this.properties.apiResource ||
         DEFAULT_API_RESOURCE;
+
+      this.logInfo("token_acquisition_started", {
+        resource,
+      });
+
+      const tokenFactory = (
+        this.context as unknown as ITokenAwareContext
+      ).aadTokenProviderFactory;
+
+      if (!tokenFactory) {
+        throw new Error(
+          "AadTokenProviderFactory is not available."
+        );
+      }
+
+      const provider = await tokenFactory.getTokenProvider();
       const token = await provider.getToken(resource);
+
+      if (!token || this.jwtSegmentCount(token) !== 3) {
+        throw new Error(
+          "Microsoft returned an invalid API token."
+        );
+      }
+
+      this.logInfo("token_acquisition_success", {
+        tokenPresent: true,
+        tokenLength: token.length,
+        jwtSegmentCount: this.jwtSegmentCount(token),
+        resource,
+      });
 
       frameWindow.postMessage(
         {
-          type: "pcl-gpt:api-token",
+          type: API_TOKEN_MESSAGE_TYPE,
           accessToken: token,
           expiresIn: 300,
+          errorCode: "",
         },
-        event.origin
+        expectedOrigin
       );
+
+      this.logInfo("post_message_sent", {
+        type: API_TOKEN_MESSAGE_TYPE,
+        targetOrigin: expectedOrigin,
+        tokenPresent: true,
+        tokenLength: token.length,
+        jwtSegmentCount: this.jwtSegmentCount(token),
+      });
     } catch (error) {
-      console.error(
-        "OneDesk Assistant could not acquire API token.",
-        error
-      );
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : String(error);
+
+      this.logError("token_acquisition_failed", {
+        errorType:
+          error instanceof Error
+            ? error.name
+            : typeof error,
+        message: errorMessage,
+        requestedResource:
+          this.properties.apiResource ||
+          DEFAULT_API_RESOURCE,
+      });
+
       frameWindow.postMessage(
         {
-          type: "pcl-gpt:api-token",
+          type: API_TOKEN_MESSAGE_TYPE,
           accessToken: "",
           expiresIn: 0,
+          errorCode: "token_acquisition_failed",
         },
-        event.origin
+        expectedOrigin
       );
+
+      this.logInfo("post_message_sent", {
+        type: API_TOKEN_MESSAGE_TYPE,
+        targetOrigin: expectedOrigin,
+        tokenPresent: false,
+        tokenLength: 0,
+        jwtSegmentCount: 0,
+        errorCode: "token_acquisition_failed",
+      });
     }
+  }
+
+  private logInfo(eventName: string, fields: Record<string, unknown> = {}): void {
+    if (!this.debugLogsEnabled) {
+      return;
+    }
+    console.info("[OneAssist SPFx]", eventName, this.sanitizeLogFields(fields));
+  }
+
+  private logWarn(eventName: string, fields: Record<string, unknown> = {}): void {
+    console.warn("[OneAssist SPFx]", eventName, this.sanitizeLogFields(fields));
+  }
+
+  private logError(eventName: string, fields: Record<string, unknown> = {}): void {
+    console.error("[OneAssist SPFx]", eventName, this.sanitizeLogFields(fields));
+  }
+
+  private sanitizeLogFields(fields: Record<string, unknown>): Record<string, unknown> {
+    const output: Record<string, unknown> = {};
+    const safeTokenDiagnostics = new Set([
+      "tokenPresent",
+      "tokenLength",
+      "jwtSegmentCount",
+    ]);
+    Object.keys(fields || {}).forEach((key) => {
+      const lower = key.toLowerCase();
+      if (safeTokenDiagnostics.has(key)) {
+        output[key] = fields[key];
+      } else if (
+        lower.indexOf("token") >= 0 ||
+        lower.indexOf("authorization") >= 0 ||
+        lower.indexOf("secret") >= 0 ||
+        lower.indexOf("password") >= 0 ||
+        lower.indexOf("cookie") >= 0
+      ) {
+        output[key] = "[REDACTED]";
+      } else {
+        output[key] = fields[key];
+      }
+    });
+    return output;
+  }
+
+  private jwtSegmentCount(token: string | undefined): number {
+    const value = String(token || "").trim();
+    return value ? value.split(".").length : 0;
   }
 
   private getFrameWindow(): Window | null {

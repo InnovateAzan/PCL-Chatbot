@@ -232,6 +232,37 @@ class ChatMessageRepository:
         )
         return result.scalar_one_or_none()
 
+    async def latest_active_policy_context(
+        self,
+        *,
+        session_id: UUID,
+        user_id: int,
+    ) -> dict | None:
+        result = await self.session.execute(
+            select(ChatMessage)
+            .join(ChatSession, ChatSession.id == ChatMessage.session_id)
+            .where(
+                ChatMessage.session_id == session_id,
+                ChatSession.user_id == user_id,
+                ChatMessage.role == "ASSISTANT",
+                ChatMessage.metadata_json.is_not(None),
+            )
+            .order_by(ChatMessage.created_at.desc(), ChatMessage.id.desc())
+            .limit(12)
+        )
+
+        for message in result.scalars().all():
+            metadata = (
+                message.metadata_json
+                if isinstance(message.metadata_json, dict)
+                else {}
+            )
+            context = metadata.get("active_policy_context")
+            if isinstance(context, dict) and context.get("document_name"):
+                return context
+
+        return None
+
 
 class MessageSourceRepository:
     def __init__(self, session: AsyncSession) -> None:

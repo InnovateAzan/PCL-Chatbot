@@ -3,8 +3,9 @@ from __future__ import annotations
 from fastapi import Header, HTTPException, Request, status
 
 from backend.app.core.config import get_settings
+from backend.app.security.auth_diagnostics import public_auth_message
 from backend.app.security.current_user import resolve_current_user_from_authorization
-from backend.app.security.entra_auth import AuthenticatedUser
+from backend.app.security.entra_auth import AuthenticatedUser, AuthenticationError
 
 
 async def get_authenticated_user(
@@ -13,10 +14,20 @@ async def get_authenticated_user(
 ) -> AuthenticatedUser:
     try:
         user = resolve_current_user_from_authorization(authorization)
+    except AuthenticationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=public_auth_message(exc.code),
+        ) from exc
+    except PermissionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=public_auth_message(str(exc) or "token_missing"),
+        ) from exc
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication failed.",
+            detail=public_auth_message("validation_failed"),
         ) from exc
     request.state.authenticated_user = user
     return user

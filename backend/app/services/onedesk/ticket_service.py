@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import logging
+
 from backend.app.core.config import get_settings
+from backend.app.core.logging_config import log_event
 from backend.app.integrations.microsoft.graph_errors import GraphConfigurationError
 from backend.app.models.schemas import ChatResponse
+from backend.app.security.auth_diagnostics import public_auth_message
 from backend.app.security.current_user import resolve_current_user_from_authorization
+from backend.app.security.entra_auth import AuthenticationError
 from backend.app.services.onedesk.base_client import OneDeskListConfig
 from backend.app.services.onedesk.graph_client import GraphOneDeskClient
 from backend.app.services.onedesk.it_ticket_service import (
@@ -16,6 +21,9 @@ from backend.app.services.onedesk.intent_service import OneDeskIntentService
 from backend.app.services.onedesk.response_formatter import OneDeskResponseFormatter
 
 
+logger = logging.getLogger(__name__)
+
+
 class OneDeskService:
     def __init__(self) -> None:
         self.settings = get_settings()
@@ -25,6 +33,13 @@ class OneDeskService:
 
     def should_handle(self, message: str) -> bool:
         intent = self.intent_service.detect(message)
+        log_event(
+            logger,
+            "ticket_intent_detected",
+            intent_type=intent.intent_type,
+            module=intent.module,
+            request_number=intent.request_number,
+        )
         return intent.module is not None and intent.intent_type not in {
             "POLICY_QUESTION",
             "GENERAL_QUESTION",
@@ -110,6 +125,13 @@ class OneDeskService:
         access_token: str | None,
     ) -> ChatResponse:
         intent = self.intent_service.detect(message)
+        log_event(
+            logger,
+            "onedesk_request_received",
+            intent_type=intent.intent_type,
+            module=intent.module,
+            request_number=intent.request_number,
+        )
         try:
             current_user = resolve_current_user_from_authorization(
                 f"Bearer {access_token}" if access_token else None
@@ -141,11 +163,20 @@ class OneDeskService:
             else:
                 tickets = await service.get_user_tickets(current_user)
                 answer = _format_ticket_list("Your IT Service Desk tickets:", tickets)
-        except (PermissionError, ItTicketPermissionError):
-            answer = "Your Microsoft session is invalid or expired."
+        except AuthenticationError as exc:
+            answer = public_auth_message(getattr(exc, "code", "validation_failed"))
             fallback = True
-        except (GraphConfigurationError, ItTicketConfigurationError):
-            answer = "The IT Service Desk integration is not fully configured."
+        except PermissionError:
+            answer = public_auth_message("token_missing")
+            fallback = True
+        except ItTicketPermissionError as exc:
+            answer = public_auth_message(str(exc) or "graph_permission_denied")
+            fallback = True
+        except GraphConfigurationError as exc:
+            answer = _format_graph_configuration_error(exc)
+            fallback = True
+        except ItTicketConfigurationError as exc:
+            answer = f"IT Service Desk configuration error: {str(exc)}"
             fallback = True
         except ItTicketTemporaryError:
             answer = "Live ticket information is temporarily unavailable."
@@ -159,6 +190,16 @@ class OneDeskService:
             notice="Data Source: IT Service Desk",
             responseSource="ONEDESK",
         )
+
+
+def _format_graph_configuration_error(error: GraphConfigurationError) -> str:
+    code = getattr(error, "code", None)
+    if code:
+        return (
+            f"{public_auth_message('obo_failed')} "
+            f"Safe Microsoft error: {code}."
+        )
+    return "The IT Service Desk integration is not fully configured."
 
 
 def _format_ticket_list(title: str, tickets: list[dict]) -> str:

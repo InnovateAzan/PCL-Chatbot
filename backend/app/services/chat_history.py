@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 import re
+import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -10,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.core.config import get_settings
+from backend.app.core.logging_config import log_event
 from backend.app.models.chat_history import (
     ChatMessage,
     ChatSession,
@@ -36,6 +38,9 @@ from backend.app.repositories.chat_history import (
 )
 from backend.app.services.chatbot import PolicyChatbot
 from backend.app.services.onedesk.ticket_service import OneDeskService
+
+
+logger = logging.getLogger(__name__)
 
 
 class UserService:
@@ -88,6 +93,7 @@ class ChatHistoryService:
         title: str | None,
     ) -> ChatSession:
         chat_session = await self.sessions.create(user_id=user.id, title=title)
+        log_event(logger, "chat_session_created", user_id=user.id, session_id=str(chat_session.id))
         await self.db_session.commit()
         await self.db_session.refresh(chat_session)
         return chat_session
@@ -124,8 +130,16 @@ class ChatHistoryService:
             role="USER",
             message_text=message.strip(),
         )
+        log_event(
+            logger,
+            "user_message_saved",
+            session_id=str(chat_session.id),
+            user_message_id=user_message.id,
+            message_length=len(message.strip()),
+        )
 
         if self.onedesk.should_handle(message):
+            log_event(logger, "chat_route_selected", route="ticket", session_id=str(chat_session.id))
             response = await self.onedesk.answer(
                 message=message,
                 user_email=user.email,
@@ -142,10 +156,23 @@ class ChatHistoryService:
                 metadata_json={"provider": response.provider},
             )
         else:
+            log_event(logger, "chat_route_selected", route="policy_rag", session_id=str(chat_session.id))
+            active_policy_context = await self.messages.latest_active_policy_context(
+                session_id=session_id,
+                user_id=user.id,
+            )
+            log_event(
+                logger,
+                "active_policy_context_loaded",
+                session_id=str(session_id),
+                context_present=bool(active_policy_context),
+                document_number=(active_policy_context or {}).get("document_number"),
+            )
             response = self.chatbot.answer(
                 message,
                 user_display_name=user.display_name,
                 preferred_name=user.preferred_name,
+                active_policy_context=active_policy_context,
             )
         response_time_ms = round((time.perf_counter() - started) * 1000)
         response_source = self._map_response_source(response)
@@ -164,8 +191,27 @@ class ChatHistoryService:
                 "provider": response.provider,
                 "notice": response.notice,
                 "source_count": len(response.sources),
+                "active_policy_context": response.active_policy_context,
+                "diagnostics": response.diagnostics,
             },
         )
+        log_event(
+            logger,
+            "assistant_message_saved",
+            session_id=str(chat_session.id),
+            assistant_message_id=assistant_message.id,
+            response_source=response_source,
+            provider=response.provider,
+            fallback_used=response.fallback,
+        )
+        if response.active_policy_context:
+            log_event(
+                logger,
+                "active_policy_context_saved",
+                session_id=str(chat_session.id),
+                document_number=response.active_policy_context.get("document_number"),
+                title=response.active_policy_context.get("title"),
+            )
         await self.sources.save_sources(
             assistant_message_id=assistant_message.id,
             sources=response.sources,
@@ -180,7 +226,9 @@ class ChatHistoryService:
 
         await self.sessions.increment_message_count(chat_session, by=2)
 
+        log_event(logger, "database_commit_started", session_id=str(chat_session.id))
         await self.db_session.commit()
+        log_event(logger, "database_commit_completed", session_id=str(chat_session.id))
 
         return response.model_copy(
             update={
@@ -248,6 +296,7 @@ class ChatHistoryService:
 
         if chat_session.status != "ENDED":
             await self.sessions.end(chat_session)
+            log_event(logger, "chat_session_ended", user_id=user.id, session_id=str(chat_session.id))
             await self.db_session.commit()
             await self.db_session.refresh(chat_session)
 

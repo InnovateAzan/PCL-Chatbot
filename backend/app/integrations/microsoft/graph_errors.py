@@ -20,4 +20,13 @@ class GraphClientError(RuntimeError):
 
 
 class GraphConfigurationError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        code: str | None = None,
+        details: dict[str, Any] | None = None,
+    ) -> None:
+        self.code = code
+        self.details = details or {}
+        super().__init__(message)

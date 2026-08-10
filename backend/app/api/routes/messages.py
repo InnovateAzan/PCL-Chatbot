@@ -1,8 +1,11 @@
+from datetime import UTC, datetime
+
 from fastapi import APIRouter, Depends
 from fastapi import HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.app.api.dependencies import get_current_user
+from backend.app.core.config import get_settings
 from backend.app.core.database import get_db_session
 from backend.app.core.existing_database import SessionLocal as ExistingSessionLocal
 from backend.app.models.chat_history import ChatbotUser
@@ -22,6 +25,14 @@ router = APIRouter(tags=["messages"])
 
 @router.post("/feedback", response_model=LegacyFeedbackResponse)
 def submit_legacy_feedback(payload: LegacyFeedbackRequest) -> LegacyFeedbackResponse:
+    if not get_settings().enable_database:
+        return LegacyFeedbackResponse(
+            id=None,
+            messageId=payload.message_id,
+            rating=payload.rating,
+            saved=False,
+        )
+
     if ExistingSessionLocal is None:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -63,8 +74,21 @@ async def submit_feedback(
     message_id: int,
     payload: FeedbackRequest,
     current_user: ChatbotUser = Depends(get_current_user),
-    db_session: AsyncSession = Depends(get_db_session),
+    db_session: AsyncSession | None = Depends(get_db_session),
 ) -> FeedbackResponse:
+    if not get_settings().enable_database:
+        now = datetime.now(UTC)
+        return FeedbackResponse(
+            id=0,
+            assistantMessageId=message_id,
+            userId=current_user.id,
+            rating=payload.rating,
+            feedbackType=payload.feedback_type,
+            comments=payload.comments,
+            created_at=now,
+            updated_at=now,
+        )
+
     feedback = await FeedbackService(db_session).submit_feedback(
         user=current_user,
         assistant_message_id=message_id,
@@ -77,8 +101,11 @@ async def submit_feedback(
 async def list_message_sources(
     message_id: int,
     current_user: ChatbotUser = Depends(get_current_user),
-    db_session: AsyncSession = Depends(get_db_session),
+    db_session: AsyncSession | None = Depends(get_db_session),
 ) -> MessageSourcesResponse:
+    if not get_settings().enable_database:
+        return MessageSourcesResponse(items=[])
+
     sources = await FeedbackService(db_session).list_sources(
         user=current_user,
         assistant_message_id=message_id,

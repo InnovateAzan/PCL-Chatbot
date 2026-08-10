@@ -522,6 +522,53 @@ def test_rto_rpo_policy_intent_prefers_backup_disaster_recovery_policy():
     assert backup_score > appendix_score
 
 
+def test_query_expansion_and_intent_detect_policy_language_from_plain_words():
+    retriever = PolicyRetriever.__new__(PolicyRetriever)
+
+    intent = retriever.detect_intent("My laptop screen cracked.")
+    expanded = retriever.expand_query("My laptop is broken.", intent=intent)
+
+    assert intent.name == "Asset Damage"
+    assert "asset damage" in expanded
+    assert "device malfunction" in expanded
+    assert "hardware failure" in expanded
+
+
+def test_policy_intents_boost_expected_policy_titles():
+    retriever = PolicyRetriever.__new__(PolicyRetriever)
+
+    assert retriever.detect_intent("I forgot my password.").name == "Password Reset"
+    assert retriever.detect_intent("I need VPN.").name == "VPN"
+    assert retriever.detect_intent("I lost my laptop.").name == "Asset Loss"
+    assert retriever.detect_intent("I need new laptop.").name == "Hardware Procurement"
+
+    intent = retriever.detect_intent("What is AI Governance?")
+    score = retriever._title_boost_score(
+        document_name="0040 - PCL - AI Governance Policy.pdf",
+        metadata={"normalized_title": "PCL - AI Governance Policy"},
+        intent=intent,
+        active_policy_context=None,
+    )
+
+    assert score == 1.0
+
+
+def test_active_policy_context_outweighs_follow_up_pronouns():
+    retriever = PolicyRetriever.__new__(PolicyRetriever)
+
+    score = retriever._title_boost_score(
+        document_name="0040 - PCL - AI Governance Policy.pdf",
+        metadata={"normalized_title": "PCL - AI Governance Policy"},
+        intent=retriever.detect_intent("How can I implement it?"),
+        active_policy_context={
+            "document_number": "0040",
+            "title": "PCL - AI Governance Policy",
+        },
+    )
+
+    assert score == 1.0
+
+
 def test_rto_rpo_chatbot_answer_does_not_call_gemini_when_policy_chunk_exists():
     class FakeRetriever:
         def search(self, message):
@@ -556,6 +603,54 @@ def test_rto_rpo_chatbot_answer_does_not_call_gemini_when_policy_chunk_exists():
     assert "Sources: Gemini general knowledge" not in (
         response.notice or ""
     )
+
+
+def test_chatbot_uses_active_policy_context_for_follow_up():
+    class FakeRetriever:
+        last_diagnostics = {}
+
+        def __init__(self):
+            self.active_policy_context = None
+            self.query = None
+
+        def detect_intent(self, message):
+            return PolicyIntentStub(confidence=0.0)
+
+        def search(self, query, active_policy_context=None):
+            self.query = query
+            self.active_policy_context = active_policy_context
+            return [
+                SourceReference(
+                    document_name="0040 - PCL - AI Governance Policy.pdf",
+                    document_number="0040",
+                    title="PCL - AI Governance Policy",
+                    page_number=2,
+                    snippet="AI systems shall be governed under approved controls.",
+                    relevance_score=0.9,
+                )
+            ]
+
+    class PolicyIntentStub:
+        def __init__(self, confidence):
+            self.confidence = confidence
+
+    retriever = FakeRetriever()
+    chatbot = PolicyChatbot(retriever=retriever)
+    chatbot.gemini_client = None
+
+    response = chatbot.answer(
+        "How can I implement it?",
+        active_policy_context={
+            "document_number": "0040",
+            "title": "PCL - AI Governance Policy",
+            "keywords": ["AI Governance"],
+        },
+    )
+
+    assert retriever.active_policy_context["document_number"] == "0040"
+    assert "Active policy context" in retriever.query
+    assert response.active_policy_context["document_number"] == "0040"
+    assert response.sources[0].document_number == "0040"
 
 
 def test_section_aware_chunking_detects_numbered_page_sections():

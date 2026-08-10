@@ -85,7 +85,7 @@ def _quote_database_credentials(database_url: str) -> str:
 engine: Engine | None = None
 SessionLocal: sessionmaker[Session] | None = None
 
-if settings.database_url:
+if settings.enable_database and settings.database_url:
     try:
         engine = create_engine(
             _sync_database_url(settings.database_url),
@@ -109,7 +109,11 @@ if settings.database_url:
         logger.exception("Could not configure PostgreSQL engine.")
 
 
-def get_db() -> Iterator[Session]:
+def get_db() -> Iterator[Session | None]:
+    if not settings.enable_database:
+        yield None
+        return
+
     if SessionLocal is None:
         raise RuntimeError("DATABASE_URL is not configured.")
 

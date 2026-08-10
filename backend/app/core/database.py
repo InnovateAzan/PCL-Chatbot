@@ -14,7 +14,7 @@ settings = get_settings()
 engine: AsyncEngine | None = None
 AsyncSessionLocal: async_sessionmaker[AsyncSession] | None = None
 
-if settings.async_database_url:
+if settings.enable_database and settings.async_database_url:
     engine = create_async_engine(
         settings.async_database_url,
         pool_size=settings.db_pool_size,
@@ -28,7 +28,11 @@ if settings.async_database_url:
     )
 
 
-async def get_db_session() -> AsyncIterator[AsyncSession]:
+async def get_db_session() -> AsyncIterator[AsyncSession | None]:
+    if not settings.enable_database:
+        yield None
+        return
+
     if AsyncSessionLocal is None:
         raise RuntimeError(
             "DATABASE_URL is not configured. Set it before using chat history APIs."

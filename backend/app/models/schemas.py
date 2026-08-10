@@ -71,6 +71,12 @@ class ChatResponse(BaseModel):
     fallback: bool = False
     provider: str = "policy-rules"
     notice: str | None = None
+    diagnostics: dict | None = Field(default=None, exclude=True)
+    active_policy_context: dict | None = Field(
+        default=None,
+        alias="activePolicyContext",
+        exclude=True,
+    )
     user_message_id: int | None = Field(default=None, alias="userMessageId")
     assistant_message_id: int | None = Field(
         default=None,

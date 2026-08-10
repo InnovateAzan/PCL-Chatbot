@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import traceback
 import logging
+import time
 
 try:
     from google import genai
@@ -12,6 +13,7 @@ except ImportError:
     genai_types = None
 
 from backend.app.core.config import get_settings
+from backend.app.core.logging_config import log_event
 from backend.app.models.schemas import ChatResponse, SourceReference
 from backend.app.services.retriever import PolicyRetriever
 from backend.app.services.source_utils import (
@@ -47,6 +49,7 @@ class PolicyChatbot:
         message: str,
         user_display_name: str | None = None,
         preferred_name: str | None = None,
+        active_policy_context: dict | None = None,
     ) -> ChatResponse:
         message = message.strip()
 
@@ -73,10 +76,49 @@ class PolicyChatbot:
             )
 
         retriever = self._get_retriever()
-        sources = retriever.search(message)
+        follow_up_context = (
+            active_policy_context
+            if self._should_use_active_policy_context(
+                message,
+                active_policy_context,
+            )
+            else None
+        )
+        retrieval_query = self._contextualized_query(
+            message=message,
+            active_policy_context=follow_up_context,
+        )
+        log_event(
+            logger,
+            "policy_chat_retrieval_started",
+            follow_up_detected=bool(follow_up_context),
+            active_policy_document_number=(follow_up_context or {}).get("document_number"),
+            active_policy_title=(follow_up_context or {}).get("title"),
+            contextual_query_rewrite_used=retrieval_query != message,
+        )
+        sources = self._search_policy_sources(
+            retriever=retriever,
+            query=retrieval_query,
+            active_policy_context=follow_up_context,
+        )
+        diagnostics = self._retriever_diagnostics(retriever)
+        log_event(
+            logger,
+            "policy_chat_retrieval_completed",
+            source_count=len(sources),
+            detected_intent=diagnostics.get("detected_intent"),
+            fallback_reason=diagnostics.get("fallback_reason"),
+        )
 
         if not sources:
-            return self._build_general_response(message)
+            response = self._build_general_response(message)
+            response.diagnostics = diagnostics | {
+                "gemini_used": response.provider.startswith("gemini"),
+                "fallback_reason": (
+                    "no policy sources found after expanded retrieval"
+                ),
+            }
+            return response
 
         sources = self._select_policy_context_sources(
             message=message,
@@ -104,17 +146,44 @@ class PolicyChatbot:
                 notice=self._build_policy_reference_notice(
                     response_sources
                 ),
+                diagnostics=diagnostics,
+                active_policy_context=self._build_active_policy_context(
+                    response_sources,
+                    last_question=message,
+                ),
             )
 
         policy_answer, policy_notice = self._try_gemini_answer(
-            message=message,
+            message=retrieval_query,
             sources=sources,
         )
 
         if policy_answer:
             if self._is_policy_unavailable_answer(policy_answer):
                 self._log_final_answer_source("Gemini")
-                return self._build_general_response(message)
+                fallback_answer = self._build_policy_fallback_answer(
+                    partial=True
+                )
+                response_sources = self._group_sources_by_document(sources)
+                return ChatResponse(
+                    answer=fallback_answer,
+                    sources=response_sources,
+                    fallback=True,
+                    provider="policy-rules",
+                    notice=self._build_policy_reference_notice(
+                        response_sources
+                    ),
+                    diagnostics=diagnostics | {
+                        "gemini_used": True,
+                        "fallback_reason": (
+                            "policy context found but did not fully answer"
+                        ),
+                    },
+                    active_policy_context=self._build_active_policy_context(
+                        response_sources,
+                        last_question=message,
+                    ),
+                )
 
             selected_sources = self._select_answer_sources(
                 sources=sources,
@@ -134,6 +203,11 @@ class PolicyChatbot:
                 notice=self._build_policy_reference_notice(
                     response_sources
                 ),
+                diagnostics=diagnostics | {"gemini_used": True},
+                active_policy_context=self._build_active_policy_context(
+                    response_sources,
+                    last_question=message,
+                ),
             )
 
         fallback_answer = self._build_policy_fallback_answer()
@@ -150,6 +224,13 @@ class PolicyChatbot:
             notice=(
                 policy_notice
                 or self._build_policy_reference_notice(response_sources)
+            ),
+            diagnostics=diagnostics | {
+                "fallback_reason": policy_notice,
+            },
+            active_policy_context=self._build_active_policy_context(
+                response_sources,
+                last_question=message,
             ),
         )
 
@@ -175,6 +256,21 @@ class PolicyChatbot:
             )
 
         return self.retriever
+
+    @staticmethod
+    def _search_policy_sources(
+        *,
+        retriever: PolicyRetriever,
+        query: str,
+        active_policy_context: dict | None,
+    ) -> list[SourceReference]:
+        try:
+            return retriever.search(
+                query,
+                active_policy_context=active_policy_context,
+            )
+        except TypeError:
+            return retriever.search(query)
 
     def _build_general_response(
         self,
@@ -241,6 +337,7 @@ class PolicyChatbot:
         sources: list[SourceReference],
     ) -> tuple[str | None, str | None]:
         if not self.gemini_client:
+            log_event(logger, "gemini_generation_skipped", reason="not_configured")
             return None, "Gemini is not configured."
 
         prompt = self._build_policy_prompt(
@@ -249,17 +346,33 @@ class PolicyChatbot:
         )
 
         try:
+            started = time.perf_counter()
+            log_event(
+                logger,
+                "gemini_generation_started",
+                mode="policy",
+                model=self.settings.gemini_model,
+                prompt_context_chunk_count=len(sources),
+                prompt_size_chars=len(prompt),
+            )
             response = self.gemini_client.models.generate_content(
                 model=self.settings.gemini_model,
                 contents=prompt,
                 config=genai_types.GenerateContentConfig(
-                    temperature=0.15,
-                    max_output_tokens=900,
+                max_output_tokens=900,
                 ),
             )
 
             answer = self._clean_ai_formatting(
                 response.text or ""
+            )
+            log_event(
+                logger,
+                "gemini_generation_completed",
+                mode="policy",
+                model=self.settings.gemini_model,
+                duration_ms=round((time.perf_counter() - started) * 1000, 2),
+                answer_present=bool(answer),
             )
 
         except Exception as error:
@@ -397,6 +510,7 @@ class PolicyChatbot:
         message: str,
     ) -> tuple[str | None, str | None]:
         if not self.gemini_client:
+            log_event(logger, "gemini_generation_skipped", mode="general", reason="not_configured")
             return (
                 None,
                 "No matching policy was found, and Gemini is not configured "
@@ -406,6 +520,14 @@ class PolicyChatbot:
         prompt = self._build_general_prompt(message)
 
         try:
+            started = time.perf_counter()
+            log_event(
+                logger,
+                "gemini_generation_started",
+                mode="general",
+                model=self.settings.gemini_model,
+                prompt_size_chars=len(prompt),
+            )
             response = self.gemini_client.models.generate_content(
                 model=self.settings.gemini_model,
                 contents=prompt,
@@ -417,6 +539,14 @@ class PolicyChatbot:
 
             answer = self._clean_ai_formatting(
                 response.text or ""
+            )
+            log_event(
+                logger,
+                "gemini_generation_completed",
+                mode="general",
+                model=self.settings.gemini_model,
+                duration_ms=round((time.perf_counter() - started) * 1000, 2),
+                answer_present=bool(answer),
             )
 
         except Exception as error:
@@ -534,7 +664,21 @@ class PolicyChatbot:
         )
 
     @staticmethod
-    def _build_policy_fallback_answer() -> str:
+    def _build_policy_fallback_answer(partial: bool = False) -> str:
+        if partial:
+            return (
+                "The available policy explains the relevant requirements, "
+                "but it does not fully describe every practical step for "
+                "this question.\n\n"
+                "[SECTION]Recommended Action[/SECTION]\n"
+                "[BULLET]Follow only the requirements written in the policy"
+                "[/BULLET]\n"
+                "[BULLET]Use the displayed policy source for the exact "
+                "approved wording[/BULLET]\n"
+                "[BULLET]Contact the IT Service Desk if clarification is "
+                "needed[/BULLET]"
+            )
+
         return (
             "Relevant policy information was found, but the AI service could "
             "not generate the complete answer.\n\n"
@@ -545,6 +689,110 @@ class PolicyChatbot:
             "[BULLET]Contact the IT Service Desk if clarification is needed"
             "[/BULLET]"
         )
+
+    @staticmethod
+    def _retriever_diagnostics(retriever: PolicyRetriever) -> dict:
+        diagnostics = getattr(retriever, "last_diagnostics", None)
+        return diagnostics.copy() if isinstance(diagnostics, dict) else {}
+
+    def _should_use_active_policy_context(
+        self,
+        message: str,
+        active_policy_context: dict | None,
+    ) -> bool:
+        if not active_policy_context:
+            return False
+
+        normalized = re.sub(
+            r"[^a-z0-9\s]",
+            " ",
+            message.lower(),
+        )
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        if not normalized:
+            return False
+
+        if any(
+            phrase in normalized
+            for phrase in [
+                "this policy",
+                "that policy",
+                "same policy",
+                "previous answer",
+                "above",
+            ]
+        ):
+            return True
+
+        words = set(normalized.split())
+        pronoun_terms = {"it", "this", "that", "same", "above", "again"}
+        if words & pronoun_terms:
+            retriever = self._get_retriever()
+            intent = retriever.detect_intent(message)
+            return intent.confidence < 0.72
+
+        return False
+
+    @staticmethod
+    def _contextualized_query(
+        *,
+        message: str,
+        active_policy_context: dict | None,
+    ) -> str:
+        if not active_policy_context:
+            return message
+
+        context_terms = " ".join(
+            str(active_policy_context.get(key) or "")
+            for key in ["document_number", "title", "keywords"]
+        ).strip()
+
+        if not context_terms:
+            return message
+
+        return f"{message}\nActive policy context: {context_terms}"
+
+    @staticmethod
+    def _build_active_policy_context(
+        sources: list[SourceReference],
+        *,
+        last_question: str,
+    ) -> dict | None:
+        if not sources:
+            return None
+
+        primary = sources[0]
+        keywords: list[str] = []
+
+        for source in sources[:3]:
+            for value in [
+                source.title,
+                source.display_title,
+                source.section,
+            ]:
+                if value and value not in keywords:
+                    keywords.append(value)
+
+        pages = sorted(
+            {
+                page
+                for source in sources
+                for page in (
+                    source.pages
+                    or ([source.page_number] if source.page_number else [])
+                )
+                if isinstance(page, int) and page > 0
+            }
+        )
+
+        return {
+            "document_number": primary.document_number,
+            "title": primary.title or primary.display_title or primary.document_name,
+            "document_name": primary.document_name,
+            "keywords": keywords,
+            "pages": pages,
+            "last_question": last_question,
+        }
 
     @staticmethod
     def _build_policy_reference_notice(
@@ -796,6 +1044,13 @@ class PolicyChatbot:
                 "\n"
                 "================ GEMINI QUOTA ERROR =================\n"
             )
+            log_event(
+                logger,
+                "gemini_generation_failed",
+                level=logging.WARNING,
+                mode=context.lower(),
+                error_code="GEMINI_RATE_LIMIT",
+            )
             print(error_text)
             print(
                 "=====================================================\n"
@@ -815,6 +1070,13 @@ class PolicyChatbot:
                 "\n"
                 f"================ GEMINI {context} MODEL ERROR "
                 "================\n"
+            )
+            log_event(
+                logger,
+                "gemini_generation_failed",
+                level=logging.ERROR,
+                mode=context.lower(),
+                error_code="GEMINI_MODEL_NOT_FOUND",
             )
             print(error_text)
             traceback.print_exc()
@@ -839,6 +1101,13 @@ class PolicyChatbot:
                 f"================ GEMINI {context} AUTH ERROR "
                 "================\n"
             )
+            log_event(
+                logger,
+                "gemini_generation_failed",
+                level=logging.ERROR,
+                mode=context.lower(),
+                error_code="GEMINI_AUTH_FAILED",
+            )
             print(error_text)
             traceback.print_exc()
             print(
@@ -853,6 +1122,14 @@ class PolicyChatbot:
         print(
             "\n"
             f"================ GEMINI {context} ERROR =============\n"
+        )
+        log_event(
+            logger,
+            "gemini_generation_failed",
+            level=logging.ERROR,
+            mode=context.lower(),
+            error_code="GEMINI_REQUEST_FAILED",
+            exception_type=type(error).__name__,
         )
         print(type(error).__name__)
         print(error_text)

@@ -31,3 +31,7 @@ class AuthenticatedUser:
 
 class AuthenticationError(ValueError):
     """Raised when a bearer token cannot be trusted."""
+
+    def __init__(self, message: str, code: str = "validation_failed") -> None:
+        self.code = code
+        super().__init__(message)

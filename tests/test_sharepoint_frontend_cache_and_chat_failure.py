@@ -1,7 +1,10 @@
 from pathlib import Path
+import sys
 
 import pytest
 from sqlalchemy.exc import SQLAlchemyError
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend.app.api.routes import chat as chat_route
 from backend.app.models.schemas import ChatRequest, ChatResponse
@@ -51,6 +54,7 @@ def test_best_effort_database_save_failure_does_not_make_chat_500(monkeypatch):
     monkeypatch.setattr(chat_route, "persist_chat_best_effort", fail_persist)
 
     response = chat_route._persist_response_to_existing_db(
+        enable_database=True,
         db=FakeDb(),
         payload=ChatRequest(message="hi"),
         response=ChatResponse(

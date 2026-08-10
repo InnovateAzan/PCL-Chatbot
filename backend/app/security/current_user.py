@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 
 from backend.app.core.config import get_settings
+from backend.app.security.auth_diagnostics import token_format_error
 from backend.app.security.entra_auth import AuthenticatedUser
 from backend.app.security.token_validation import get_entra_token_validator
 
@@ -18,8 +19,11 @@ def resolve_current_user_from_authorization(
         if not authorization or not authorization.lower().startswith("bearer "):
             if settings.environment.lower() in {"development", "dev", "local"}:
                 return _development_user()
-            raise PermissionError("Bearer token is required.")
+            raise PermissionError("token_missing")
         token = authorization.split(" ", 1)[1].strip()
+        format_error = token_format_error(token)
+        if format_error:
+            raise PermissionError(format_error)
         return get_entra_token_validator().validate(token)
 
     if settings.environment.lower() not in {"development", "dev", "local"}:

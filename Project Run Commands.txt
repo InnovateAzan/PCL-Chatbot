@@ -1,5 +1,5 @@
 Backend — Terminal 1
-cd "D:\PROJECT\Chart Bot"
+cd "D:\PROJECT\Chat-Bot"
 .\.venv\Scripts\Activate.ps1
 python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8085
 
@@ -11,7 +11,7 @@ http://127.0.0.1:8085/api/health
 
 
 Frontend — Terminal 2
-cd "D:\PROJECT\Chart Bot\frontend"
+cd "D:\PROJECT\Chat-Bot\frontend"
 python -m http.server 5500
 
 Open:
@@ -22,7 +22,7 @@ http://127.0.0.1:5500
 
 
 SPFx — Terminal 3
-cd "D:\PROJECT\Chart Bot\sharepoint-spfx"
+cd "D:\PROJECT\Chat-Bot\sharepoint-spfx"
 gulp serve
 
 Agar gulp command recognize na ho:
@@ -42,3 +42,9 @@ Three terminals ek saath running rehne chahiye:
 Terminal 1 → Backend 8085
 Terminal 2 → Frontend 5500
 Terminal 3 → SPFx 4321
+
+
+
+ngrok cmd run commands:      ngrok http 8085
+
+https://volley-facial-lumpish.ngrok-free.dev/api/health
