@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+import sys
+
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from backend.app.security.entra_auth import AuthenticatedUser
 from backend.app.services.onedesk.field_mapping import get_live_it_ticket_field_mapping
@@ -35,7 +40,7 @@ class FakeSharePointClient:
                 "id": "1",
                 "createdBy": {"user": {"email": "azan@example.com", "id": "oid-1"}},
                 "fields": {
-                    "Serial_x0020_Number": 520,
+                    "SerialNumber": 520,
                     "Title": "Printer not working properly - Toner Cartridge Issue",
                     "Status": "New",
                     "AssignedTo": None,
@@ -50,7 +55,7 @@ class FakeSharePointClient:
                 "id": "2",
                 "createdBy": {"user": {"email": "azan@example.com"}},
                 "fields": {
-                    "Serial_x0020_Number": 514,
+                    "SerialNumber": 514,
                     "Title": "Missing items in OPM against advance plan",
                     "Status": "In progress",
                     "AssignedTo": {"displayName": "Hunain Arbani"},
@@ -62,7 +67,7 @@ class FakeSharePointClient:
                 "id": "3",
                 "createdBy": {"user": {"email": "other@example.com"}},
                 "fields": {
-                    "Serial_x0020_Number": 999,
+                    "SerialNumber": 999,
                     "Title": "Other user's ticket",
                     "Status": "Pending",
                     "Created": "2026-08-06T09:30:00Z",
@@ -71,7 +76,7 @@ class FakeSharePointClient:
             {
                 "id": "4",
                 "fields": {
-                    "Serial_x0020_Number": 510,
+                    "SerialNumber": 510,
                     "Title": "Resolved request",
                     "Status": "resolved",
                     "Author": {"email": "azan@example.com"},
@@ -79,6 +84,12 @@ class FakeSharePointClient:
                 },
             },
         ]
+
+    async def resolve_person_lookup_name(self, site_id, lookup_id):
+        if str(lookup_id) == "22":
+            return "Hunain Arbani"
+
+        return None
 
 
 @pytest.fixture
@@ -132,6 +143,36 @@ async def test_status_buckets_latest_and_summary(ticket_service, current_user):
     }
 
 
+@pytest.mark.asyncio
+async def test_assigned_lookup_id_resolves_to_display_name(current_user):
+    class LookupOnlySharePointClient(FakeSharePointClient):
+        async def get_list_items(self, site_id, list_id, **kwargs):
+            return [
+                {
+                    "id": "10",
+                    "createdBy": {"user": {"email": "azan@example.com", "id": "oid-1"}},
+                    "fields": {
+                        "SerialNumber": 522,
+                        "Title": "Lookup-based assignee",
+                        "Status": "Open",
+                        "Assignedto0LookupId": 22,
+                        "RequestType": "Network & Infrastructure Support",
+                        "Created": "2026-08-05T09:30:00Z",
+                        "Modified": "2026-08-05T10:30:00Z",
+                    },
+                }
+            ]
+
+    service = ItTicketService(access_token="user-token")
+    service._client = LookupOnlySharePointClient()
+    service._site_id = "site-id"
+    service._list_id = "list-id"
+
+    tickets = await service.get_user_tickets(current_user)
+
+    assert tickets[0]["assigned_to"] == "Hunain Arbani"
+
+
 def test_real_internal_names_discovered_from_columns():
     mapping = get_live_it_ticket_field_mapping(
         [
@@ -143,9 +184,9 @@ def test_real_internal_names_discovered_from_columns():
         ]
     )
 
-    assert mapping.ticket_number == "Serial_x0020_Number"
+    assert mapping.ticket_number == "SerialNumber"
     assert mapping.created_by == "Author"
-    assert mapping.request_type == "Request_Type"
+    assert mapping.request_type == "RequestType"
     assert mapping.missing_required == []
 
 
@@ -153,8 +194,10 @@ def test_ticket_intents_route_before_policy_patterns():
     service = OneDeskIntentService()
 
     assert service.detect("show my tickets").intent_type == "IT_TICKET_LIST"
-    assert service.detect("serial number 520 ka status kya hai?").intent_type == "IT_TICKET_SERIAL"
+    assert service.detect("serial number 520 ka status kya hai?").intent_type == "IT_TICKET_STATUS"
     assert service.detect("Meri latest ticket ka status kya hai?").intent_type == "IT_TICKET_LATEST"
+    assert service.detect("who is ticket 522 assigned to?").intent_type == "IT_TICKET_ASSIGNEE"
+    assert service.detect("is ticket 113 resolved?").intent_type == "IT_TICKET_STATUS"
     assert service.detect("what is password policy?").intent_type == "POLICY_QUESTION"
 
 
@@ -183,4 +226,5 @@ def test_ticket_response_format_excludes_comments_latest_update_and_sources():
     assert "Comment" not in combined
     assert "Latest Update" not in combined
     assert "Sources:" not in combined
+    assert "Priority" not in combined
     assert "5 August 2026" in combined

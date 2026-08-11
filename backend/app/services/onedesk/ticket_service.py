@@ -139,10 +139,10 @@ class OneDeskService:
             service = ItTicketService(access_token=access_token)
             if intent.intent_type == "IT_TICKET_OPEN":
                 tickets = await service.get_open_tickets(current_user)
-                answer = _format_ticket_list("Your open tickets:", tickets)
+                answer = _format_ticket_list("Your open tickets", tickets)
             elif intent.intent_type == "IT_TICKET_CLOSED":
                 tickets = await service.get_closed_tickets(current_user)
-                answer = _format_ticket_list("Your closed tickets:", tickets)
+                answer = _format_ticket_list("Your closed tickets", tickets)
             elif intent.intent_type == "IT_TICKET_LATEST":
                 ticket = await service.get_latest_ticket(current_user)
                 answer = _format_latest_ticket(ticket)
@@ -151,6 +151,12 @@ class OneDeskService:
             elif intent.intent_type == "IT_TICKET_STATUS_COUNT" and intent.status:
                 tickets = await service.get_tickets_by_status(current_user, intent.status)
                 answer = f"You have {len(tickets)} {intent.status} ticket{'s' if len(tickets) != 1 else ''}."
+            elif intent.intent_type == "IT_TICKET_ASSIGNEE" and intent.request_number:
+                ticket = await service.get_ticket_by_serial_number(
+                    current_user,
+                    intent.request_number,
+                )
+                answer = _format_ticket_assignee(ticket, intent.request_number)
             elif intent.intent_type in {"IT_TICKET_SERIAL", "IT_TICKET_STATUS"} and intent.request_number:
                 ticket = await service.get_ticket_by_serial_number(
                     current_user,
@@ -159,10 +165,10 @@ class OneDeskService:
                 answer = _format_specific_ticket(ticket, intent.request_number)
             elif intent.intent_type == "IT_TICKET_STATUS_LIST" and intent.status:
                 tickets = await service.get_tickets_by_status(current_user, intent.status)
-                answer = _format_ticket_list(f"Your {intent.status} tickets:", tickets)
+                answer = _format_ticket_list(f"Your {intent.status} tickets", tickets)
             else:
                 tickets = await service.get_user_tickets(current_user)
-                answer = _format_ticket_list("Your IT Service Desk tickets:", tickets)
+                answer = _format_ticket_list("Your IT Service Desk tickets", tickets)
         except AuthenticationError as exc:
             answer = public_auth_message(getattr(exc, "code", "validation_failed"))
             fallback = True
@@ -208,15 +214,14 @@ def _format_ticket_list(title: str, tickets: list[dict]) -> str:
     blocks = [title]
     for ticket in tickets[:10]:
         lines = [
-            f"• Ticket #{ticket.get('serial_number') or 'Not available'}",
-            f"  Title: {_display(ticket.get('title'))}",
-            f"  Status: {_display(ticket.get('status'))}",
-            f"  Assigned To: {_display(ticket.get('assigned_to'), 'Not assigned')}",
+            f"Ticket #{ticket.get('serial_number') or 'Not available'} — {_display(ticket.get('status'))}",
+            f"Title: {_display(ticket.get('title'))}",
+            f"Assigned To: {_display(ticket.get('assigned_to'), 'Not assigned')}",
         ]
         if ticket.get("request_type"):
-            lines.append(f"  Request Type: {ticket['request_type']}")
+            lines.append(f"Request Type: {ticket['request_type']}")
         if ticket.get("created_at"):
-            lines.append(f"  Created: {_format_date(ticket['created_at'])}")
+            lines.append(f"Created: {_format_date(ticket['created_at'])}")
         blocks.append("\n".join(lines))
     return "\n\n".join(blocks)
 
@@ -225,37 +230,61 @@ def _format_latest_ticket(ticket: dict | None) -> str:
     if not ticket:
         return "No IT Service Desk tickets were found for your account."
     return (
-        f"Your latest ticket is #{ticket.get('serial_number')}.\n\n"
+        f"Ticket #{ticket.get('serial_number')} — {_display(ticket.get('status'))}\n\n"
         f"Title: {_display(ticket.get('title'))}\n"
         f"Status: {_display(ticket.get('status'))}\n"
         f"Assigned To: {_display(ticket.get('assigned_to'), 'Not assigned')}\n"
-        f"Created: {_format_date(ticket.get('created_at'))}"
+        f"Request Type: {_display(ticket.get('request_type'))}\n"
+        f"Created: {_format_date(ticket.get('created_at'))}\n"
+        f"Last Updated: {_format_date(ticket.get('modified_at'))}\n"
+        f"Data Source: IT Service Desk"
     )
 
 
 def _format_summary(summary: dict[str, int]) -> str:
     return (
         "Your ticket summary:\n\n"
-        f"• Open: {summary.get('open', 0)}\n"
-        f"• Pending: {summary.get('pending', 0)}\n"
-        f"• Resolved: {summary.get('resolved', 0)}\n"
-        f"• Closed: {summary.get('closed', 0)}\n"
-        f"• Total: {summary.get('total', 0)}"
+        f"Open: {summary.get('open', 0)}\n"
+        f"Pending: {summary.get('pending', 0)}\n"
+        f"Resolved: {summary.get('resolved', 0)}\n"
+        f"Closed: {summary.get('closed', 0)}\n"
+        f"Total: {summary.get('total', 0)}"
     )
 
 
 def _format_specific_ticket(ticket: dict | None, serial_number: str) -> str:
     if not ticket:
         return f"Ticket #{serial_number} was not found in your account."
+    status = _display(ticket.get("status"))
+    headline = (
+        f"Ticket #{ticket.get('serial_number')} — {status}"
+        if status
+        else f"Ticket #{ticket.get('serial_number')}"
+    )
     return (
-        f"Ticket #{ticket.get('serial_number')}\n\n"
+        f"{headline}\n\n"
         f"Title: {_display(ticket.get('title'))}\n"
         f"Status: {_display(ticket.get('status'))}\n"
         f"Assigned To: {_display(ticket.get('assigned_to'), 'Not assigned')}\n"
-        f"Priority: {_display(ticket.get('priority'))}\n"
         f"Request Type: {_display(ticket.get('request_type'))}\n"
         f"Created: {_format_date(ticket.get('created_at'))}\n"
-        f"Last Modified: {_format_date(ticket.get('modified_at'))}"
+        f"Last Updated: {_format_date(ticket.get('modified_at'))}\n"
+        f"Data Source: IT Service Desk"
+    )
+
+
+def _format_ticket_assignee(ticket: dict | None, serial_number: str) -> str:
+    if not ticket:
+        return f"Ticket #{serial_number} was not found in your account."
+    assigned_to = _display(ticket.get("assigned_to"), "Not assigned")
+    return (
+        f"Ticket #{ticket.get('serial_number')} is assigned to {assigned_to}.\n\n"
+        f"Title: {_display(ticket.get('title'))}\n"
+        f"Status: {_display(ticket.get('status'))}\n"
+        f"Request Type: {_display(ticket.get('request_type'))}\n"
+        f"Created: {_format_date(ticket.get('created_at'))}\n"
+        f"Last Updated: {_format_date(ticket.get('modified_at'))}\n"
+        f"Data Source: IT Service Desk"
     )
 
 

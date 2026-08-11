@@ -23,7 +23,17 @@ class OneDeskIntentService:
         request_number = self._extract_request_number(message)
 
         if self._looks_like_it_ticket_intent(normalized, request_number):
+            if request_number and any(
+                phrase in normalized
+                for phrase in ("assigned to", "assigned", "assignedto")
+            ):
+                return OneDeskIntent("IT_TICKET_ASSIGNEE", "it", request_number)
             if request_number:
+                if any(
+                    phrase in normalized
+                    for phrase in ("status", "resolved", "closed", "open", "pending", "new", "blocked", "in progress")
+                ):
+                    return OneDeskIntent("IT_TICKET_STATUS", "it", request_number)
                 if not request_number.isdigit():
                     return OneDeskIntent("IT_TICKET_STATUS", "it", request_number)
                 return OneDeskIntent("IT_TICKET_SERIAL", "it", request_number)
