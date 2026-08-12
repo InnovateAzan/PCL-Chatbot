@@ -73,13 +73,29 @@ async def chat(
             authenticated_user_id=None,
             message_length=len(payload.message),
         )
-        if onedesk.should_handle(payload.message):
-            log_event(logger, "chat_route_selected", route="ticket")
-            response = await onedesk.answer(
-                message=payload.message,
-                user_email="",
-                access_token=access_token,
+        try:
+            ticket_request = onedesk.should_handle(
+                payload.message,
+                session_key=str(payload.session_uuid or payload.session_id or ""),
             )
+        except TypeError:
+            ticket_request = onedesk.should_handle(payload.message)
+
+        if ticket_request:
+            log_event(logger, "chat_route_selected", route="ticket")
+            try:
+                response = await onedesk.answer(
+                    message=payload.message,
+                    user_email="",
+                    access_token=access_token,
+                    session_key=str(payload.session_uuid or payload.session_id or ""),
+                )
+            except TypeError:
+                response = await onedesk.answer(
+                    message=payload.message,
+                    user_email="",
+                    access_token=access_token,
+                )
         else:
             log_event(logger, "chat_route_selected", route="policy_rag")
             response = get_chatbot().answer(
@@ -111,12 +127,28 @@ async def chat(
             else None
         )
         onedesk = get_onedesk_service()
-        if onedesk.should_handle(payload.message):
-            response = await onedesk.answer(
-                message=payload.message,
-                user_email=payload.user_email or "",
-                access_token=access_token,
+        try:
+            ticket_request = onedesk.should_handle(
+                payload.message,
+                session_key=str(payload.session_uuid or payload.session_id or ""),
             )
+        except TypeError:
+            ticket_request = onedesk.should_handle(payload.message)
+
+        if ticket_request:
+            try:
+                response = await onedesk.answer(
+                    message=payload.message,
+                    user_email=payload.user_email or "",
+                    access_token=access_token,
+                    session_key=str(payload.session_uuid or payload.session_id or ""),
+                )
+            except TypeError:
+                response = await onedesk.answer(
+                    message=payload.message,
+                    user_email=payload.user_email or "",
+                    access_token=access_token,
+                )
         else:
             response = get_chatbot().answer(
                 payload.message,

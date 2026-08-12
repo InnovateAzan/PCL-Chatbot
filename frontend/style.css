@@ -439,6 +439,52 @@ body.hosted-mode #collapseButton {
   height: 0;
 }
 
+.quick-actions {
+  margin-bottom: 10px;
+  padding: 14px;
+  border: 1px solid rgba(11, 138, 62, 0.12);
+  border-radius: 18px;
+  background: linear-gradient(180deg, rgba(11, 138, 62, 0.06), rgba(11, 138, 62, 0.02));
+}
+
+.quick-actions-title {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 10px;
+  color: var(--widget-text);
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+.quick-actions-subtitle {
+  color: var(--widget-muted);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.quick-actions-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.quick-action-chip {
+  border: 1px solid rgba(11, 138, 62, 0.18);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--brand);
+  padding: 10px 14px;
+  font-size: 0.92rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.quick-action-chip:hover {
+  background: var(--brand-soft);
+}
+
 body.embed-mode .messages:empty {
   overflow-y: hidden;
 }

@@ -54,6 +54,7 @@ class ItTicketTemporaryError(RuntimeError):
 
 @dataclass(frozen=True)
 class NormalizedItTicket:
+    item_id: str | None
     serial_number: int | str
     title: str | None
     status: str | None
@@ -63,6 +64,7 @@ class NormalizedItTicket:
     nature_of_complaint: str | None
     created_at: str | None
     modified_at: str | None
+    ticket_url: str | None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -103,6 +105,47 @@ class ItTicketService:
         )
 
         return [ticket.to_dict() for ticket in tickets]
+
+    async def get_assigned_to_me_tickets(
+        self,
+        current_user: AuthenticatedUser,
+        *,
+        user_email: str,
+    ) -> list[dict[str, Any]]:
+        tickets = await self._owned_tickets(current_user)
+        identifiers = {
+            str(identifier).strip().lower()
+            for identifier in getattr(current_user, "normalized_identifiers", set())
+            if str(identifier).strip()
+        }
+        for value in (
+            current_user.display_name,
+            current_user.preferred_name,
+        ):
+            text = str(value or "").strip().lower()
+            if text:
+                identifiers.add(text)
+        normalized_email = user_email.strip().lower()
+        if normalized_email:
+            identifiers.add(normalized_email)
+
+        return [
+            ticket.to_dict()
+            for ticket in tickets
+            if _assigned_to_current_user(ticket.assigned_to, identifiers)
+        ]
+
+    async def get_unassigned_tickets(
+        self,
+        current_user: AuthenticatedUser,
+    ) -> list[dict[str, Any]]:
+        tickets = await self._owned_tickets(current_user)
+
+        return [
+            ticket.to_dict()
+            for ticket in tickets
+            if _is_unassigned(ticket.assigned_to)
+        ]
 
     async def get_open_tickets(
         self,
@@ -340,6 +383,8 @@ class ItTicketService:
                 item,
                 fields,
                 mapping,
+                site_id=site_id,
+                list_id=self._list_id,
                 assigned_to_override=assigned_to,
             )
 
@@ -722,6 +767,8 @@ def _normalize_ticket(
     fields: dict[str, Any],
     mapping: ItTicketFieldMapping,
     *,
+    site_id: str,
+    list_id: str,
     assigned_to_override: str | None = None,
 ) -> NormalizedItTicket:
     assigned_to = (
@@ -736,6 +783,7 @@ def _normalize_ticket(
     )
 
     return NormalizedItTicket(
+        item_id=str(item.get("id") or "").strip() or None,
         serial_number=_coerce_serial(
             _field(
                 fields,
@@ -791,6 +839,11 @@ def _normalize_ticket(
             )
         )
         or item.get("lastModifiedDateTime"),
+        ticket_url=_build_ticket_url(
+            site_id=site_id,
+            list_id=list_id,
+            item_id=str(item.get("id") or "").strip() or None,
+        ),
     )
 
 
@@ -954,6 +1007,20 @@ def _optional_text(
     return text or None
 
 
+def _build_ticket_url(*, site_id: str, list_id: str, item_id: str | None) -> str | None:
+    if not site_id or not list_id or not item_id:
+        return None
+
+    site_root = get_settings().onedesk_site_url.rstrip("/")
+    if not site_root:
+        return None
+
+    return (
+        f"{site_root}/_layouts/15/listform.aspx?"
+        f"PageType=4&ListId={list_id}&ID={item_id}"
+    )
+
+
 def _coerce_serial(
     value: Any,
 ) -> int | str:
@@ -977,6 +1044,35 @@ def _normalize_status(
         .lower()
         .replace("-", " ")
         .split()
+    )
+
+
+def _is_unassigned(value: object) -> bool:
+    text = str(value or "").strip().lower()
+    return not text or text in {"not assigned", "unassigned", "none", "null"}
+
+
+def _assigned_to_current_user(
+    value: object,
+    identifiers: set[str],
+) -> bool:
+    text = str(value or "").strip().lower()
+
+    if not text or text in {"not assigned", "unassigned"}:
+        return False
+
+    normalized_text = _normalize_match_token(text)
+
+    return any(
+        _normalize_match_token(identifier) in normalized_text
+        for identifier in identifiers
+        if identifier
+    )
+
+
+def _normalize_match_token(value: str) -> str:
+    return "".join(
+        ch for ch in str(value).lower() if ch.isalnum()
     )
 
 

@@ -138,12 +138,21 @@ class ChatHistoryService:
             message_length=len(message.strip()),
         )
 
-        if self.onedesk.should_handle(message):
+        session_key = str(chat_session.id)
+        context_request_number = self.onedesk.get_ticket_context(session_key)
+
+        if self.onedesk.should_handle(
+            message,
+            context_request_number=context_request_number,
+            session_key=session_key,
+        ):
             log_event(logger, "chat_route_selected", route="ticket", session_id=str(chat_session.id))
             response = await self.onedesk.answer(
                 message=message,
                 user_email=user.email,
                 access_token=access_token,
+                context_request_number=context_request_number,
+                session_key=session_key,
             )
             await self.audit.create(
                 user_id=user.id,
@@ -371,7 +380,6 @@ class ChatHistoryService:
                 return topic
 
         return None
-
 
 class FeedbackService:
     def __init__(self, db_session: AsyncSession) -> None:

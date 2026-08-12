@@ -5,7 +5,7 @@ const API_TOKEN_MESSAGE_TYPE = "onedesk-api-token";
 const LEGACY_API_TOKEN_MESSAGE_TYPE = "pcl-gpt:api-token";
 const API_TOKEN_REQUEST_MESSAGE_TYPE = "pcl-gpt:api-token-request";
 
-window.ONEASSIST_BUILD_VERSION = "2026-08-07-v1";
+window.ONEASSIST_BUILD_VERSION = "2026-08-11-v4";
 
 const runtimeConfig = getRuntimeConfig();
 const API_BASE_URL = runtimeConfig.apiBaseUrl;
@@ -13,8 +13,12 @@ const EMBED_MODE = runtimeConfig.embedMode;
 const HOSTED_MODE = runtimeConfig.hostedMode;
 const DEFAULT_OPEN = runtimeConfig.defaultOpen;
 const ENABLE_HISTORY_PANEL = runtimeConfig.enableHistoryPanel;
-const ENABLE_CLIENT_DEBUG_LOGS = Boolean(runtimeConfig.enableClientDebugLogs);
-const LOG_USER_MESSAGES = Boolean(runtimeConfig.logUserMessages);
+const ENABLE_CLIENT_DEBUG_LOGS = Boolean(
+  runtimeConfig.enableClientDebugLogs
+);
+const LOG_USER_MESSAGES = Boolean(
+  runtimeConfig.logUserMessages
+);
 
 const oneAssistLogger = {
   info(event, fields = {}) {
@@ -69,7 +73,10 @@ const submitFeedbackButton = document.getElementById(
 );
 
 const feedbackInput = document.getElementById("feedbackInput");
-const feedbackChoices = document.querySelectorAll(".feedback-choice");
+
+const feedbackChoices = document.querySelectorAll(
+  ".feedback-choice"
+);
 
 let selectedRating = "";
 let currentUser = null;
@@ -78,6 +85,9 @@ let currentSessionId = "";
 let initializingUserPromise = null;
 let ensuringSessionPromise = null;
 let typingIndicatorElement = null;
+let quickActionsElement = null;
+let awaitingSpecificTicketNumber = false;
+let selectedSpecificTicketNumber = "";
 
 const renderedMessageKeys = new Set();
 
@@ -88,17 +98,27 @@ let apiAccessTokenExpiresAt = 0;
 let apiAccessTokenPromise = null;
 let apiAccessTokenError = "";
 
-oneAssistLogger.info("OneDesk Assistant frontend version:", {
-  version: window.ONEASSIST_BUILD_VERSION,
-  apiBaseUrl: API_BASE_URL,
-  origin: window.location.origin,
-  embedMode: EMBED_MODE,
-  hostedMode: HOSTED_MODE,
-  enableClientDebugLogs: ENABLE_CLIENT_DEBUG_LOGS,
-});
+oneAssistLogger.info(
+  "OneDesk Assistant frontend version:",
+  {
+    version: window.ONEASSIST_BUILD_VERSION,
+    apiBaseUrl: API_BASE_URL,
+    origin: window.location.origin,
+    embedMode: EMBED_MODE,
+    hostedMode: HOSTED_MODE,
+    enableClientDebugLogs: ENABLE_CLIENT_DEBUG_LOGS,
+  }
+);
 
-document.body.classList.toggle("embed-mode", EMBED_MODE);
-document.body.classList.toggle("hosted-mode", HOSTED_MODE);
+document.body.classList.toggle(
+  "embed-mode",
+  EMBED_MODE
+);
+
+document.body.classList.toggle(
+  "hosted-mode",
+  HOSTED_MODE
+);
 
 document.documentElement.classList.toggle(
   "embed-mode",
@@ -121,8 +141,19 @@ setWidgetOpen(DEFAULT_OPEN);
 
 updateFeedbackSubmitState();
 
+/*
+ * IMPORTANT FIX:
+ * Previous code called showGuidedOptions("root"),
+ * but that function does not exist.
+ *
+ * The real function in this file is:
+ * showQuickActions("root")
+ */
 ensureBackendReady()
-  .then(() => prepareActiveSession())
+  .then(async () => {
+    await prepareActiveSession();
+    showQuickActions("root");
+  })
   .catch((error) => {
     oneAssistLogger.error(
       "active_session_initialization_failed",
@@ -133,21 +164,30 @@ ensureBackendReady()
     );
   });
 
-launcherButton?.addEventListener("click", () => {
-  const willOpen =
-    chatWidget?.classList.contains("hidden") ?? true;
+launcherButton?.addEventListener(
+  "click",
+  () => {
+    const willOpen =
+      chatWidget?.classList.contains("hidden") ?? true;
 
-  setWidgetOpen(willOpen);
-});
+    setWidgetOpen(willOpen);
+  }
+);
 
-collapseButton?.addEventListener("click", () => {
-  setWidgetOpen(false);
-  notifyHostClose();
-});
+collapseButton?.addEventListener(
+  "click",
+  () => {
+    setWidgetOpen(false);
+    notifyHostClose();
+  }
+);
 
-endChatButton?.addEventListener("click", () => {
-  openFeedback();
-});
+endChatButton?.addEventListener(
+  "click",
+  () => {
+    openFeedback();
+  }
+);
 
 closeFeedbackButton?.addEventListener(
   "click",
@@ -165,18 +205,21 @@ feedbackBackdrop?.addEventListener(
 );
 
 feedbackChoices.forEach((button) => {
-  button.addEventListener("click", () => {
-    selectedRating =
-      button.dataset.rating ?? "";
+  button.addEventListener(
+    "click",
+    () => {
+      selectedRating =
+        button.dataset.rating ?? "";
 
-    feedbackChoices.forEach((item) => {
-      item.classList.remove("selected");
-    });
+      feedbackChoices.forEach((item) => {
+        item.classList.remove("selected");
+      });
 
-    button.classList.add("selected");
+      button.classList.add("selected");
 
-    updateFeedbackSubmitState();
-  });
+      updateFeedbackSubmitState();
+    }
+  );
 });
 
 submitFeedbackButton?.addEventListener(
@@ -199,6 +242,41 @@ chatForm?.addEventListener(
       messageInput?.value.trim() ?? "";
 
     if (!message) {
+      return;
+    }
+
+    /*
+     * Specific ticket number flow.
+     *
+     * If the user clicked "Check Specific Ticket"
+     * and then enters a number like 113, do not
+     * immediately send it to backend.
+     *
+     * Instead show:
+     * Status
+     * Assigned To
+     * Request Type
+     * Created Date
+     * Last Updated
+     * Full Details
+     */
+    if (
+      awaitingSpecificTicketNumber &&
+      /^\d{1,8}$/.test(message)
+    ) {
+      appendMessage(
+        "user",
+        message
+      );
+
+      messageInput.value = "";
+
+      autoResizeTextarea();
+
+      showTicketSpecificActions(
+        message
+      );
+
       return;
     }
 
@@ -262,11 +340,18 @@ chatForm?.addEventListener(
       oneAssistLogger.info(
         "chat_request_started",
         {
-          apiUrl: API_BASE_URL,
-          endpoint: "/chat",
-          url: chatEndpoint,
+          apiUrl:
+            API_BASE_URL,
+
+          endpoint:
+            "/chat",
+
+          url:
+            chatEndpoint,
+
           version:
             window.ONEASSIST_BUILD_VERSION,
+
           messageLength:
             message.length,
 
@@ -299,42 +384,43 @@ chatForm?.addEventListener(
                 : {}),
             },
 
-            body: JSON.stringify({
-              message,
+            body:
+              JSON.stringify({
+                message,
 
-              ...(historyEnabled
-                ? {
-                    sessionId,
-                  }
-                : {}),
+                ...(historyEnabled
+                  ? {
+                      sessionId,
+                    }
+                  : {}),
 
-              ...(currentSessionId
-                ? {
-                    sessionUuid:
-                      currentSessionId,
-                  }
-                : {}),
+                ...(currentSessionId
+                  ? {
+                      sessionUuid:
+                        currentSessionId,
+                    }
+                  : {}),
 
-              userEmail:
-                runtimeConfig
-                  .userProfile
-                  .email,
+                userEmail:
+                  runtimeConfig
+                    .userProfile
+                    .email,
 
-              displayName:
-                runtimeConfig
-                  .userProfile
-                  .displayName,
+                displayName:
+                  runtimeConfig
+                    .userProfile
+                    .displayName,
 
-              preferredName:
-                runtimeConfig
-                  .userProfile
-                  .preferredName,
+                preferredName:
+                  runtimeConfig
+                    .userProfile
+                    .preferredName,
 
-              department:
-                runtimeConfig
-                  .userProfile
-                  .department,
-            }),
+                department:
+                  runtimeConfig
+                    .userProfile
+                    .department,
+              }),
           }
         );
 
@@ -348,7 +434,9 @@ chatForm?.addEventListener(
       oneAssistLogger.info(
         "chat_request_completed",
         {
-          endpoint: "/chat",
+          endpoint:
+            "/chat",
+
           status:
             response.status,
         }
@@ -407,7 +495,9 @@ chatForm?.addEventListener(
 
       appendMessage(
         "bot",
-        formatApiErrorMessage(error)
+        formatApiErrorMessage(
+          error
+        )
       );
     } finally {
       removeTypingIndicator();
@@ -445,7 +535,9 @@ window.addEventListener(
       event.data || {};
 
     if (
-      !isApiTokenMessage(payload)
+      !isApiTokenMessage(
+        payload
+      )
     ) {
       return;
     }
@@ -513,13 +605,20 @@ messageInput?.addEventListener(
   handleComposerKeydown
 );
 
+
+/* =========================================================
+   BACKEND
+   ========================================================= */
+
 function ensureBackendReady() {
   if (backendReadyPromise) {
     return backendReadyPromise;
   }
 
   const healthEndpoint =
-    buildApiUrl("/health");
+    buildApiUrl(
+      "/health"
+    );
 
   oneAssistLogger.info(
     "backend_health_check_started",
@@ -542,16 +641,19 @@ function ensureBackendReady() {
     apiRequest(
       "/health",
       {
-        method: "GET",
+        method:
+          "GET",
 
         headers: {
-          "Accept":
+          Accept:
             "application/json",
         },
       }
     )
       .then(
-        async (response) => {
+        async (
+          response
+        ) => {
           oneAssistLogger.info(
             "backend_health_check_completed",
             {
@@ -579,11 +681,14 @@ function ensureBackendReady() {
           return true;
         }
       )
-      .catch((error) => {
-        backendReadyPromise = null;
+      .catch(
+        (error) => {
+          backendReadyPromise =
+            null;
 
-        throw error;
-      });
+          throw error;
+        }
+      );
 
   return backendReadyPromise;
 }
@@ -594,8 +699,12 @@ async function apiRequest(
   requestOptions = {}
 ) {
   return performApiRequest(
-    buildApiUrl(path),
+    buildApiUrl(
+      path
+    ),
+
     options,
+
     requestOptions.requireAuth !== false &&
       isEmbeddedSharePointMode()
   );
@@ -609,8 +718,7 @@ async function performApiRequest(
 ) {
   const headers =
     buildTransportHeaders({
-      ...(options.headers ||
-        {}),
+      ...(options.headers || {}),
 
       ...(requiresAuth
         ? await getApiAuthorizationHeader()
@@ -620,15 +728,21 @@ async function performApiRequest(
   let response;
 
   try {
-    response = await fetch(url, {
-      ...options,
-      headers,
-    });
+    response =
+      await fetch(
+        url,
+        {
+          ...options,
+          headers,
+        }
+      );
   } catch (error) {
     if (
       requiresAuth &&
       isEmbeddedSharePointMode() &&
-      !isUsableJwt(apiAccessToken)
+      !isUsableJwt(
+        apiAccessToken
+      )
     ) {
       throw createApiTokenError(
         apiAccessTokenError ||
@@ -650,13 +764,15 @@ async function performApiRequest(
 
   const retryHeaders =
     buildTransportHeaders({
-      ...(options.headers ||
-        {}),
+      ...(options.headers || {}),
 
       ...(requiresAuth
-        ? await getApiAuthorizationHeader({
-            forceRefresh: true,
-          })
+        ? await getApiAuthorizationHeader(
+            {
+              forceRefresh:
+                true,
+            }
+          )
         : {}),
     });
 
@@ -698,6 +814,11 @@ function isEmbeddedSharePointMode() {
   );
 }
 
+
+/* =========================================================
+   AUTH
+   ========================================================= */
+
 async function getApiAuthorizationHeader(
   options = {}
 ) {
@@ -706,12 +827,18 @@ async function getApiAuthorizationHeader(
       options
     );
 
-  if (!isUsableJwt(token)) {
+  if (
+    !isUsableJwt(
+      token
+    )
+  ) {
     oneAssistLogger.warn(
       "authorization_header_skipped",
       {
         tokenPresent:
-          Boolean(token),
+          Boolean(
+            token
+          ),
 
         tokenLength:
           String(
@@ -743,7 +870,7 @@ async function getApiAuthorizationHeader(
   }
 
   return {
-    "Authorization":
+    Authorization:
       `Bearer ${token}`,
   };
 }
@@ -751,7 +878,9 @@ async function getApiAuthorizationHeader(
 async function getApiAccessToken(
   options = {}
 ) {
-  if (options.forceRefresh) {
+  if (
+    options.forceRefresh
+  ) {
     oneAssistLogger.info(
       "token_refresh_requested"
     );
@@ -776,7 +905,9 @@ async function getApiAccessToken(
     return "";
   }
 
-  if (apiAccessTokenPromise) {
+  if (
+    apiAccessTokenPromise
+  ) {
     return apiAccessTokenPromise;
   }
 
@@ -892,13 +1023,16 @@ async function getApiAccessToken(
             type:
               API_TOKEN_REQUEST_MESSAGE_TYPE,
           },
+
           runtimeConfig.parentOrigin
         );
       }
-    ).finally(() => {
-      apiAccessTokenPromise =
-        null;
-    });
+    ).finally(
+      () => {
+        apiAccessTokenPromise =
+          null;
+      }
+    );
 
   return apiAccessTokenPromise;
 }
@@ -916,11 +1050,19 @@ function createApiTokenError(
     new Error(
       code ===
         "token_request_timeout"
-        ? "Microsoft sign-in did not respond. Refresh the OneDesk page and try again."
-        : "Microsoft sign-in could not obtain access to the OneDesk Chat Assistant API. Verify the access_as_user permission is approved, then refresh the OneDesk page."
+        ? (
+            "Microsoft sign-in did not respond. " +
+            "Refresh the OneDesk page and try again."
+          )
+        : (
+            "Microsoft sign-in could not obtain access to the " +
+            "OneDesk Chat Assistant API. Verify the access_as_user " +
+            "permission is approved, then refresh the OneDesk page."
+          )
     );
 
-  error.code = code;
+  error.code =
+    code;
 
   error.endpoint =
     "Microsoft sign-in";
@@ -1003,7 +1145,9 @@ function normalizeApiToken(
     ).trim();
 
   if (
-    !isUsableJwt(token)
+    !isUsableJwt(
+      token
+    )
   ) {
     return "";
   }
@@ -1020,8 +1164,7 @@ function isUsableJwt(
     ).trim();
 
   return (
-    value.length >
-      100 &&
+    value.length > 100 &&
     jwtSegmentCount(
       value
     ) === 3
@@ -1041,6 +1184,11 @@ function jwtSegmentCount(
     : 0;
 }
 
+
+/* =========================================================
+   API ERRORS
+   ========================================================= */
+
 async function buildApiResponseError(
   response,
   endpoint
@@ -1054,7 +1202,9 @@ async function buildApiResponseError(
         .clone()
         .json();
 
-    if (payload?.detail) {
+    if (
+      payload?.detail
+    ) {
       backendDetail =
         String(
           payload.detail
@@ -1072,8 +1222,11 @@ async function buildApiResponseError(
   const error =
     new Error(
       backendDetail ||
-        backendBody ||
-        `Backend request failed with HTTP ${response.status}.`
+      backendBody ||
+      (
+        "Backend request failed with HTTP " +
+        `${response.status}.`
+      )
     );
 
   error.apiUrl =
@@ -1097,7 +1250,8 @@ function formatApiErrorMessage(
 ) {
   if (
     String(
-      error?.code || ""
+      error?.code ||
+      ""
     ).startsWith(
       "token_"
     )
@@ -1115,11 +1269,13 @@ function formatApiErrorMessage(
   const backendDetail =
     String(
       error?.backendDetail ||
-        error?.message ||
-        ""
+      error?.message ||
+      ""
     ).trim();
 
-  if (statusCode) {
+  if (
+    statusCode
+  ) {
     return (
       "The assistant could not complete the backend request.\n\n" +
       `API URL: ${API_BASE_URL}\n` +
@@ -1149,15 +1305,341 @@ function isAuthenticationError(
 ) {
   return (
     String(
-      error?.code || ""
+      error?.code ||
+      ""
     ).startsWith(
       "token_"
     ) ||
     Number(
-      error?.statusCode || 0
+      error?.statusCode ||
+      0
     ) === 401
   );
 }
+
+
+/* =========================================================
+   QUICK ACTIONS
+   ========================================================= */
+
+function showQuickActions(
+  kind = "root"
+) {
+  if (!messages) {
+    return;
+  }
+
+  clearQuickActions();
+
+  const wrapper =
+    document.createElement(
+      "div"
+    );
+
+  wrapper.className =
+    "quick-actions";
+
+  const title =
+    document.createElement(
+      "div"
+    );
+
+  title.className =
+    "quick-actions-title";
+
+  title.textContent =
+    kind === "tickets"
+      ? "Choose a ticket action"
+      : "What would you like help with?";
+
+  const actions =
+    kind === "tickets"
+      ? [
+          {
+            label: "View My Tickets",
+            message: "show my tickets",
+          },
+          {
+            label: "My Assigned Tickets",
+            message: "show my assigned tickets",
+          },
+          {
+            label: "Open Tickets",
+            message: "show my open tickets",
+          },
+          {
+            label: "Resolved Tickets",
+            message: "show my resolved tickets",
+          },
+          {
+            label: "Ticket Summary",
+            message: "ticket summary",
+          },
+          {
+            label: "Check Specific Ticket",
+            message: "__ask_ticket_number__",
+          },
+        ]
+      : [
+          {
+            label: "IT Policies",
+            message: "it policies",
+          },
+          {
+            label: "IT Service Desk Tickets",
+            message: "it service desk tickets",
+          },
+        ];
+
+  const chips =
+    document.createElement(
+      "div"
+    );
+
+  chips.className =
+    "quick-actions-chips";
+
+  actions.forEach(
+    (action) => {
+      const button =
+        document.createElement(
+          "button"
+        );
+
+      button.type =
+        "button";
+
+      button.className =
+        "quick-action-chip";
+
+      button.textContent =
+        action.label;
+
+      button.addEventListener(
+        "click",
+        () =>
+          handleQuickAction(
+            action.message
+          )
+      );
+
+      chips.appendChild(
+        button
+      );
+    }
+  );
+
+  wrapper.appendChild(
+    title
+  );
+
+  wrapper.appendChild(
+    chips
+  );
+
+  /*
+   * Append rather than prepend so the guided
+   * menu behaves naturally inside the chat.
+   */
+  messages.appendChild(
+    wrapper
+  );
+
+  quickActionsElement =
+    wrapper;
+
+  messages.scrollTop =
+    messages.scrollHeight;
+}
+
+function clearQuickActions() {
+  quickActionsElement?.remove();
+
+  quickActionsElement =
+    null;
+}
+
+function handleQuickAction(
+  message
+) {
+  if (
+    !messageInput ||
+    !chatForm
+  ) {
+    return;
+  }
+
+  if (
+    message ===
+    "it service desk tickets"
+  ) {
+    showQuickActions(
+      "tickets"
+    );
+
+    return;
+  }
+
+  if (
+    message ===
+    "__ask_ticket_number__"
+  ) {
+    clearQuickActions();
+
+    awaitingSpecificTicketNumber =
+      true;
+
+    selectedSpecificTicketNumber =
+      "";
+
+    appendMessage(
+      "bot",
+      "Please enter the ticket number."
+    );
+
+    messageInput.focus();
+
+    return;
+  }
+
+  clearQuickActions();
+
+  messageInput.value =
+    message;
+
+  chatForm.requestSubmit();
+}
+
+function showTicketSpecificActions(
+  ticketNumber
+) {
+  selectedSpecificTicketNumber =
+    String(
+      ticketNumber || ""
+    ).trim();
+
+  awaitingSpecificTicketNumber =
+    false;
+
+  clearQuickActions();
+
+  if (
+    !messages
+  ) {
+    return;
+  }
+
+  const wrapper =
+    document.createElement(
+      "div"
+    );
+
+  wrapper.className =
+    "quick-actions";
+
+  const title =
+    document.createElement(
+      "div"
+    );
+
+  title.className =
+    "quick-actions-title";
+
+  title.textContent =
+    `What would you like to know about Ticket #${selectedSpecificTicketNumber}?`;
+
+  const chips =
+    document.createElement(
+      "div"
+    );
+
+  chips.className =
+    "quick-actions-chips";
+
+  const mapping = [
+    [
+      "Status",
+      "status",
+    ],
+    [
+      "Assigned To",
+      "assigned to",
+    ],
+    [
+      "Request Type",
+      "request type",
+    ],
+    [
+      "Created Date",
+      "created",
+    ],
+    [
+      "Last Updated",
+      "last updated",
+    ],
+    [
+      "Full Details",
+      "details",
+    ],
+  ];
+
+  mapping.forEach(
+    ([label, suffix]) => {
+      const button =
+        document.createElement(
+          "button"
+        );
+
+      button.type =
+        "button";
+
+      button.className =
+        "quick-action-chip";
+
+      button.textContent =
+        label;
+
+      button.addEventListener(
+        "click",
+        () => {
+          clearQuickActions();
+
+          messageInput.value =
+            `ticket ${selectedSpecificTicketNumber} ${suffix}`;
+
+          chatForm.requestSubmit();
+        }
+      );
+
+      chips.appendChild(
+        button
+      );
+    }
+  );
+
+  wrapper.appendChild(
+    title
+  );
+
+  wrapper.appendChild(
+    chips
+  );
+
+  messages.appendChild(
+    wrapper
+  );
+
+  quickActionsElement =
+    wrapper;
+
+  messages.scrollTop =
+    messages.scrollHeight;
+}
+
+
+/* =========================================================
+   MESSAGES
+   ========================================================= */
 
 function appendMessage(
   role,
@@ -1165,7 +1647,9 @@ function appendMessage(
   sources = [],
   meta = {}
 ) {
-  if (!messages) {
+  if (
+    !messages
+  ) {
     return;
   }
 
@@ -1192,7 +1676,9 @@ function appendMessage(
   article.className =
     `message ${role}`;
 
-  if (messageKey) {
+  if (
+    messageKey
+  ) {
     article.dataset.messageKey =
       messageKey;
 
@@ -1217,7 +1703,9 @@ function appendMessage(
   body.className =
     "message-body";
 
-  if (role === "bot") {
+  if (
+    role === "bot"
+  ) {
     body.appendChild(
       formatAssistantAnswer(
         text
@@ -1230,7 +1718,9 @@ function appendMessage(
       );
   }
 
-  bubble.appendChild(body);
+  bubble.appendChild(
+    body
+  );
 
   const noticeElement =
     buildNoticeElement(
@@ -1325,12 +1815,22 @@ function showTypingIndicator() {
     dot.className =
       "typing-dot";
 
-    dots.appendChild(dot);
+    dots.appendChild(
+      dot
+    );
   }
 
-  bubble.appendChild(dots);
-  article.appendChild(bubble);
-  messages.appendChild(article);
+  bubble.appendChild(
+    dots
+  );
+
+  article.appendChild(
+    bubble
+  );
+
+  messages.appendChild(
+    article
+  );
 
   typingIndicatorElement =
     article;
@@ -1362,12 +1862,19 @@ function buildRenderedMessageKey(
     meta.userMessageId ||
     "";
 
-  if (!id) {
+  if (
+    !id
+  ) {
     return "";
   }
 
   return `${role}:${id}`;
 }
+
+
+/* =========================================================
+   ASSISTANT RESPONSE FORMATTER
+   ========================================================= */
 
 function formatAssistantAnswer(
   answer
@@ -1400,7 +1907,9 @@ function formatAssistantAnswer(
   }
 
   function getBulletList() {
-    if (bulletList) {
+    if (
+      bulletList
+    ) {
       return bulletList;
     }
 
@@ -1423,7 +1932,9 @@ function formatAssistantAnswer(
     const rawLine
     of lines
   ) {
-    if (!rawLine) {
+    if (
+      !rawLine
+    ) {
       closeBulletList();
       continue;
     }
@@ -1433,7 +1944,9 @@ function formatAssistantAnswer(
         /^\[\s*SECTION\s*\](.*?)\[\s*\/\s*SECTION\s*\]$/i
       );
 
-    if (sectionMatch) {
+    if (
+      sectionMatch
+    ) {
       closeBulletList();
 
       const heading =
@@ -1444,8 +1957,10 @@ function formatAssistantAnswer(
       heading.className =
         "answer-section-heading";
 
-      heading.textContent =
-        sectionMatch[1].trim();
+      appendSafeInlineContent(
+        heading,
+        sectionMatch[1].trim()
+      );
 
       container.appendChild(
         heading
@@ -1459,35 +1974,8 @@ function formatAssistantAnswer(
         /^\[\s*BULLET\s*\](.*?)\[\s*\/\s*BULLET\s*\]$/i
       );
 
-    if (bulletMatch) {
-      const list =
-        getBulletList();
-
-      const item =
-        document.createElement(
-          "li"
-        );
-
-      item.textContent =
-        bulletMatch[1].trim();
-
-      list.appendChild(
-        item
-      );
-
-      continue;
-    }
-
     if (
-      rawLine.startsWith(
-        "• "
-      ) ||
-      rawLine.startsWith(
-        "- "
-      ) ||
-      rawLine.startsWith(
-        "* "
-      )
+      bulletMatch
     ) {
       const list =
         getBulletList();
@@ -1497,10 +1985,37 @@ function formatAssistantAnswer(
           "li"
         );
 
-      item.textContent =
+      appendSafeInlineContent(
+        item,
+        bulletMatch[1].trim()
+      );
+
+      list.appendChild(
+        item
+      );
+
+      continue;
+    }
+
+    if (
+      rawLine.startsWith("• ") ||
+      rawLine.startsWith("- ") ||
+      rawLine.startsWith("* ")
+    ) {
+      const list =
+        getBulletList();
+
+      const item =
+        document.createElement(
+          "li"
+        );
+
+      appendSafeInlineContent(
+        item,
         rawLine
           .slice(2)
-          .trim();
+          .trim()
+      );
 
       list.appendChild(
         item
@@ -1519,8 +2034,10 @@ function formatAssistantAnswer(
     paragraph.className =
       "answer-paragraph";
 
-    paragraph.textContent =
-      rawLine;
+    appendSafeInlineContent(
+      paragraph,
+      rawLine
+    );
 
     container.appendChild(
       paragraph
@@ -1538,10 +2055,12 @@ function formatAssistantAnswer(
     paragraph.className =
       "answer-paragraph";
 
-    paragraph.textContent =
+    appendSafeInlineContent(
+      paragraph,
       String(
         answer || ""
-      );
+      )
+    );
 
     container.appendChild(
       paragraph
@@ -1549,6 +2068,152 @@ function formatAssistantAnswer(
   }
 
   return container;
+}
+
+function appendSafeInlineContent(
+  element,
+  text
+) {
+  const value =
+    String(
+      text || ""
+    );
+
+  const fullMarkdownLink =
+    value.match(
+      /^\s*\[([^\]]+)\]\s*\(\s*(https?:\/\/.+)\s*\)\s*$/i
+    );
+
+  if (
+    fullMarkdownLink
+  ) {
+    createSafeExternalLink(
+      element,
+      fullMarkdownLink[1],
+      fullMarkdownLink[2]
+    );
+
+    return;
+  }
+
+  const inlineMarkdownPattern =
+    /\[([^\]]+)\]\s*\(\s*(https?:\/\/[^<>\s]+)\s*\)/gi;
+
+  let lastIndex = 0;
+  let match;
+
+  while (
+    (
+      match =
+        inlineMarkdownPattern.exec(
+          value
+        )
+    ) !== null
+  ) {
+    if (
+      match.index >
+      lastIndex
+    ) {
+      element.appendChild(
+        document.createTextNode(
+          value.slice(
+            lastIndex,
+            match.index
+          )
+        )
+      );
+    }
+
+    createSafeExternalLink(
+      element,
+      match[1],
+      match[2]
+    );
+
+    lastIndex =
+      inlineMarkdownPattern.lastIndex;
+  }
+
+  if (
+    lastIndex > 0
+  ) {
+    if (
+      lastIndex <
+      value.length
+    ) {
+      element.appendChild(
+        document.createTextNode(
+          value.slice(
+            lastIndex
+          )
+        )
+      );
+    }
+
+    return;
+  }
+
+  element.textContent =
+    value;
+}
+
+function createSafeExternalLink(
+  element,
+  label,
+  url
+) {
+  const cleanLabel =
+    String(
+      label || "Open Ticket"
+    ).trim();
+
+  const cleanUrl =
+    String(
+      url || ""
+    ).trim();
+
+  if (
+    !/^https?:\/\//i.test(
+      cleanUrl
+    )
+  ) {
+    element.appendChild(
+      document.createTextNode(
+        cleanLabel
+      )
+    );
+
+    return;
+  }
+
+  const link =
+    document.createElement(
+      "a"
+    );
+
+  link.href =
+    cleanUrl;
+
+  link.textContent =
+    cleanLabel;
+
+  link.target =
+    "_blank";
+
+  link.rel =
+    "noopener noreferrer";
+
+  link.className =
+    "answer-link";
+
+  link.setAttribute(
+    "aria-label",
+    `${cleanLabel} - opens in a new tab`
+  );
+
+  element.appendChild(
+    link
+  );
 }
 
 function normalizeAssistantAnswer(
@@ -1566,6 +2231,18 @@ function normalizeAssistantAnswer(
         /\r/g,
         "\n"
       );
+
+  text =
+    text.replace(
+      /\[([^\]\n]+)\]\s*\n+\s*\((https?:\/\/[^\n]+)\)/gi,
+      "[$1]($2)"
+    );
+
+  text =
+    text.replace(
+      /\[([^\]\n]+)\]\s+\((https?:\/\/[^\n]+)\)/gi,
+      "[$1]($2)"
+    );
 
   text =
     text.replace(
@@ -1701,6 +2378,11 @@ function normalizeAssistantAnswer(
   return text.trim();
 }
 
+
+/* =========================================================
+   SOURCES
+   ========================================================= */
+
 function formatSourceLabel(
   source
 ) {
@@ -1733,7 +2415,9 @@ function formatSourceLabel(
       ? source.pages
           .map(
             (page) =>
-              Number(page)
+              Number(
+                page
+              )
           )
           .filter(
             (page) =>
@@ -1760,13 +2444,9 @@ function formatSourceLabel(
     source?.pageNumber;
 
   const pageLabel =
-    uniquePages.length >
-    1
-      ? `Pages ${uniquePages.join(
-          ", "
-        )}`
-      : uniquePages.length ===
-          1
+    uniquePages.length > 1
+      ? `Pages ${uniquePages.join(", ")}`
+      : uniquePages.length === 1
         ? `Page ${uniquePages[0]}`
         : pageNumber
           ? `Page ${pageNumber}`
@@ -1817,9 +2497,14 @@ function buildNoticeElement(
 
         if (
           label &&
-          !seen.has(key)
+          !seen.has(
+            key
+          )
         ) {
-          seen.add(key);
+          seen.add(
+            key
+          );
+
           uniqueSources.push(
             label
           );
@@ -1828,8 +2513,7 @@ function buildNoticeElement(
     );
 
     if (
-      uniqueSources.length >
-      0
+      uniqueSources.length > 0
     ) {
       const wrapper =
         document.createElement(
@@ -1889,7 +2573,9 @@ function buildNoticeElement(
     }
   }
 
-  if (fallbackNotice) {
+  if (
+    fallbackNotice
+  ) {
     const note =
       document.createElement(
         "p"
@@ -1937,6 +2623,11 @@ function sanitizeDisplayedNotice(
     .trim();
 }
 
+
+/* =========================================================
+   FEEDBACK
+   ========================================================= */
+
 function createFeedbackBar(
   assistantMessageId
 ) {
@@ -1953,7 +2644,8 @@ function createFeedbackBar(
       "button"
     );
 
-  up.type = "button";
+  up.type =
+    "button";
 
   up.className =
     "feedback-toggle";
@@ -1971,7 +2663,8 @@ function createFeedbackBar(
       "button"
     );
 
-  down.type = "button";
+  down.type =
+    "button";
 
   down.className =
     "feedback-toggle";
@@ -2024,8 +2717,13 @@ function createFeedbackBar(
     }
   );
 
-  wrapper.appendChild(up);
-  wrapper.appendChild(down);
+  wrapper.appendChild(
+    up
+  );
+
+  wrapper.appendChild(
+    down
+  );
 
   return wrapper;
 }
@@ -2056,7 +2754,8 @@ async function submitMessageFeedback(
       await apiRequest(
         `/messages/${assistantMessageId}/feedback`,
         {
-          method: "POST",
+          method:
+            "POST",
 
           headers: {
             "Content-Type":
@@ -2076,7 +2775,9 @@ async function submitMessageFeedback(
         }
       );
 
-    if (!response.ok) {
+    if (
+      !response.ok
+    ) {
       throw new Error(
         "Feedback could not be saved."
       );
@@ -2107,8 +2808,15 @@ async function submitMessageFeedback(
   }
 }
 
+
+/* =========================================================
+   SHAREPOINT HOST
+   ========================================================= */
+
 function scheduleHostLayoutUpdate() {
-  if (!HOSTED_MODE) {
+  if (
+    !HOSTED_MODE
+  ) {
     return;
   }
 
@@ -2146,7 +2854,9 @@ function notifyHostLayout() {
     activeElement
       ?.getBoundingClientRect();
 
-  if (!bounds) {
+  if (
+    !bounds
+  ) {
     return;
   }
 
@@ -2191,6 +2901,11 @@ function notifyHostClose() {
   );
 }
 
+
+/* =========================================================
+   RUNTIME CONFIG
+   ========================================================= */
+
 function getRuntimeConfig() {
   const params =
     new URLSearchParams(
@@ -2232,8 +2947,7 @@ function getRuntimeConfig() {
       "apiBase"
     ) ||
     document.body.dataset.apiBase ||
-    window.PCL_GPT_CONFIG
-      ?.apiBaseUrl ||
+    window.PCL_GPT_CONFIG?.apiBaseUrl ||
     DEFAULT_API_BASE_URL;
 
   return {
@@ -2251,10 +2965,8 @@ function getRuntimeConfig() {
         params.get(
           "enableHistory"
         ) ||
-        document.body.dataset
-          .enableHistory ||
-        window.PCL_GPT_CONFIG
-          ?.enableHistory
+        document.body.dataset.enableHistory ||
+        window.PCL_GPT_CONFIG?.enableHistory
       ) === true,
 
     userProfile:
@@ -2267,8 +2979,7 @@ function getRuntimeConfig() {
         params.get(
           "parentOrigin"
         ) ||
-        document.body.dataset
-          .parentOrigin ||
+        document.body.dataset.parentOrigin ||
         ""
       ).trim(),
 
@@ -2277,10 +2988,8 @@ function getRuntimeConfig() {
         params.get(
           "enableClientDebugLogs"
         ) ||
-        document.body.dataset
-          .enableClientDebugLogs ||
-        window.PCL_GPT_CONFIG
-          ?.enableClientDebugLogs
+        document.body.dataset.enableClientDebugLogs ||
+        window.PCL_GPT_CONFIG?.enableClientDebugLogs
       ) === true,
 
     logUserMessages:
@@ -2288,10 +2997,8 @@ function getRuntimeConfig() {
         params.get(
           "logUserMessages"
         ) ||
-        document.body.dataset
-          .logUserMessages ||
-        window.PCL_GPT_CONFIG
-          ?.logUserMessages
+        document.body.dataset.logUserMessages ||
+        window.PCL_GPT_CONFIG?.logUserMessages
       ) === true,
 
     defaultOpen:
@@ -2307,8 +3014,8 @@ function buildUserProfile(
   params
 ) {
   const configProfile =
-    window.PCL_GPT_CONFIG
-      ?.userProfile || {};
+    window.PCL_GPT_CONFIG?.userProfile ||
+    {};
 
   const savedProfile =
     readLocalProfile();
@@ -2383,7 +3090,8 @@ function readLocalProfile() {
     return JSON.parse(
       window.localStorage.getItem(
         LOCAL_PROFILE_STORAGE_KEY
-      ) || "{}"
+      ) ||
+      "{}"
     );
   } catch {
     return {};
@@ -2424,16 +3132,22 @@ function normalizeApiBase(
 function parseBooleanFlag(
   value
 ) {
-  if (value == null) {
+  if (
+    value == null
+  ) {
     return undefined;
   }
 
   const normalized =
-    String(value)
+    String(
+      value
+    )
       .trim()
       .toLowerCase();
 
-  if (!normalized) {
+  if (
+    !normalized
+  ) {
     return undefined;
   }
 
@@ -2463,21 +3177,30 @@ function resolveDefaultOpen(
 ) {
   if (
     typeof explicitOpen ===
-    "boolean"
+      "boolean"
   ) {
     return explicitOpen;
   }
 
-  if (embedMode) {
+  if (
+    embedMode
+  ) {
     return true;
   }
 
-  if (hostedMode) {
+  if (
+    hostedMode
+  ) {
     return false;
   }
 
   return true;
 }
+
+
+/* =========================================================
+   COMPOSER
+   ========================================================= */
 
 function handleComposerKeydown(
   event
@@ -2488,7 +3211,9 @@ function handleComposerKeydown(
     return;
   }
 
-  if (event.ctrlKey) {
+  if (
+    event.ctrlKey
+  ) {
     const start =
       messageInput.selectionStart;
 
@@ -2520,8 +3245,15 @@ function handleComposerKeydown(
   chatForm?.requestSubmit();
 }
 
+
+/* =========================================================
+   USER
+   ========================================================= */
+
 async function initializeCurrentUser() {
-  if (currentUser) {
+  if (
+    currentUser
+  ) {
     return currentUser;
   }
 
@@ -2535,7 +3267,8 @@ async function initializeCurrentUser() {
     apiRequest(
       "/users/initialize",
       {
-        method: "POST",
+        method:
+          "POST",
 
         headers: {
           "Content-Type":
@@ -2549,8 +3282,12 @@ async function initializeCurrentUser() {
       }
     )
       .then(
-        async (response) => {
-          if (!response.ok) {
+        async (
+          response
+        ) => {
+          if (
+            !response.ok
+          ) {
             throw new Error(
               "User initialization failed."
             );
@@ -2574,11 +3311,18 @@ async function initializeCurrentUser() {
   return initializingUserPromise;
 }
 
+
+/* =========================================================
+   CHAT SESSION PERSISTENCE
+   ========================================================= */
+
 async function prepareActiveSession() {
   const storedSessionId =
     readActiveSessionId();
 
-  if (!storedSessionId) {
+  if (
+    !storedSessionId
+  ) {
     return "";
   }
 
@@ -2588,7 +3332,9 @@ async function prepareActiveSession() {
   const restored =
     await restoreActiveSession(
       {
-        userId: "",
+        userId:
+          "",
+
         email:
           runtimeConfig
             .userProfile
@@ -2598,7 +3344,9 @@ async function prepareActiveSession() {
       storedSessionId
     );
 
-  if (!restored) {
+  if (
+    !restored
+  ) {
     clearActiveSessionId();
 
     currentSessionId =
@@ -2611,7 +3359,9 @@ async function prepareActiveSession() {
 async function ensureChatSession(
   user
 ) {
-  if (currentSessionId) {
+  if (
+    currentSessionId
+  ) {
     return currentSessionId;
   }
 
@@ -2640,7 +3390,9 @@ async function resolveActiveChatSession(
   const storedSessionId =
     readActiveSessionId();
 
-  if (storedSessionId) {
+  if (
+    storedSessionId
+  ) {
     currentSessionId =
       storedSessionId;
 
@@ -2650,7 +3402,9 @@ async function resolveActiveChatSession(
         storedSessionId
       );
 
-    if (restored) {
+    if (
+      restored
+    ) {
       return currentSessionId;
     }
 
@@ -2672,7 +3426,8 @@ async function createChatSession(
     await apiRequest(
       "/chat/sessions",
       {
-        method: "POST",
+        method:
+          "POST",
 
         headers: {
           "Content-Type":
@@ -2685,11 +3440,15 @@ async function createChatSession(
         },
 
         body:
-          JSON.stringify({}),
+          JSON.stringify(
+            {}
+          ),
       }
     );
 
-  if (!response.ok) {
+  if (
+    !response.ok
+  ) {
     throw new Error(
       "Chat session could not be created."
     );
@@ -2702,7 +3461,9 @@ async function createChatSession(
     payload.sessionId ||
     "";
 
-  if (!currentSessionId) {
+  if (
+    !currentSessionId
+  ) {
     throw new Error(
       "Chat session response did not include a session ID."
     );
@@ -2726,7 +3487,9 @@ async function restoreActiveSession(
     user?.email ||
     "";
 
-  if (!userEmail) {
+  if (
+    !userEmail
+  ) {
     return false;
   }
 
@@ -2752,7 +3515,9 @@ async function restoreActiveSession(
         }
       );
 
-    if (!response.ok) {
+    if (
+      !response.ok
+    ) {
       return false;
     }
 
@@ -2766,7 +3531,7 @@ async function restoreActiveSession(
     const status =
       String(
         session.status ||
-          ""
+        ""
       ).toUpperCase();
 
     if (
@@ -2786,7 +3551,7 @@ async function restoreActiveSession(
 
     restoreMessages(
       payload.messages ||
-        []
+      []
     );
 
     return true;
@@ -2847,8 +3612,7 @@ function restoreMessages(
           !Number.isNaN(
             rightDate
           ) &&
-          leftDate !==
-            rightDate
+          leftDate !== rightDate
         ) {
           return (
             leftDate -
@@ -2859,11 +3623,11 @@ function restoreMessages(
         return (
           Number(
             left.id ||
-              0
+            0
           ) -
           Number(
             right.id ||
-              0
+            0
           )
         );
       }
@@ -2874,13 +3638,14 @@ function restoreMessages(
       const rawRole =
         String(
           message.role ||
-            ""
+          ""
         ).toLowerCase();
 
       const role =
         rawRole ===
           "assistant" ||
-        rawRole === "bot"
+        rawRole ===
+          "bot"
           ? "bot"
           : "user";
 
@@ -2904,18 +3669,21 @@ function restoreMessages(
           [],
         {
           enableFeedback:
-            role === "bot" &&
+            role ===
+              "bot" &&
             Boolean(
               messageId
             ),
 
           assistantMessageId:
-            role === "bot"
+            role ===
+              "bot"
               ? messageId
               : undefined,
 
           userMessageId:
-            role === "user"
+            role ===
+              "user"
               ? messageId
               : undefined,
 
@@ -2933,12 +3701,14 @@ function persistResponseSession(
     payload.sessionUuid ||
     (
       typeof payload.sessionId ===
-      "string"
+        "string"
         ? payload.sessionId
         : ""
     );
 
-  if (responseSessionId) {
+  if (
+    responseSessionId
+  ) {
     currentSessionId =
       responseSessionId;
 
@@ -2976,7 +3746,7 @@ function readActiveSessionId() {
       window.localStorage.getItem(
         getActiveSessionStorageKey()
       ) ||
-        ""
+      ""
     ).trim();
   } catch {
     return "";
@@ -2992,7 +3762,7 @@ function writeActiveSessionId(
 
       String(
         sessionId ||
-          ""
+        ""
       )
     );
   } catch {
@@ -3010,15 +3780,24 @@ function clearActiveSessionId() {
   }
 }
 
+
+/* =========================================================
+   WIDGET
+   ========================================================= */
+
 function setComposerState(
   isLoading
 ) {
-  if (messageInput) {
+  if (
+    messageInput
+  ) {
     messageInput.disabled =
       isLoading;
   }
 
-  if (sendButton) {
+  if (
+    sendButton
+  ) {
     sendButton.disabled =
       isLoading;
   }
@@ -3046,24 +3825,38 @@ function setWidgetOpen(
 
   launcherButton.setAttribute(
     "aria-expanded",
-    String(isOpen)
+    String(
+      isOpen
+    )
   );
 
-  if (isOpen) {
+  if (
+    isOpen
+  ) {
     messageInput?.focus();
+    showQuickActions("root");
   }
 
   scheduleHostLayoutUpdate();
 }
 
+
+/* =========================================================
+   END CHAT / FEEDBACK MODAL
+   ========================================================= */
+
 function openFeedback() {
   feedbackModal
     ?.classList
-    .remove("hidden");
+    .remove(
+      "hidden"
+    );
 
   feedbackBackdrop
     ?.classList
-    .remove("hidden");
+    .remove(
+      "hidden"
+    );
 
   updateFeedbackSubmitState();
 }
@@ -3071,18 +3864,25 @@ function openFeedback() {
 function closeFeedback() {
   feedbackModal
     ?.classList
-    .add("hidden");
+    .add(
+      "hidden"
+    );
 
   feedbackBackdrop
     ?.classList
-    .add("hidden");
+    .add(
+      "hidden"
+    );
 
-  if (feedbackInput) {
+  if (
+    feedbackInput
+  ) {
     feedbackInput.value =
       "";
   }
 
-  selectedRating = "";
+  selectedRating =
+    "";
 
   feedbackChoices.forEach(
     (item) => {
@@ -3102,7 +3902,9 @@ async function endChatSession() {
 
   resetChatSession();
 
-  setWidgetOpen(false);
+  setWidgetOpen(
+    false
+  );
 
   notifyHostClose();
 }
@@ -3124,7 +3926,8 @@ async function endCurrentBackendSession() {
     await apiRequest(
       `/chat/sessions/${currentSessionId}/end`,
       {
-        method: "POST",
+        method:
+          "POST",
 
         headers: {
           "X-OneAssist-User-Id":
@@ -3154,23 +3957,50 @@ async function endCurrentBackendSession() {
 }
 
 function resetChatSession() {
-  if (messages) {
+  if (
+    messages
+  ) {
     messages.replaceChildren();
   }
 
   renderedMessageKeys.clear();
 
-  if (messageInput) {
+  awaitingSpecificTicketNumber =
+    false;
+
+  selectedSpecificTicketNumber =
+    "";
+
+  clearQuickActions();
+
+  if (
+    messageInput
+  ) {
     messageInput.value =
       "";
 
     autoResizeTextarea();
   }
 
-  setComposerState(false);
+  setComposerState(
+    false
+  );
 
-  if (ENABLE_HISTORY_PANEL) {
+  if (
+    ENABLE_HISTORY_PANEL
+  ) {
     // Reserved for history panel.
+  }
+
+  /*
+   * Prepare the next fresh chat.
+   */
+  if (
+    messages?.childElementCount === 0
+  ) {
+    showQuickActions(
+      "root"
+    );
   }
 }
 
@@ -3189,16 +4019,21 @@ function updateFeedbackSubmitState() {
   submitFeedbackButton.disabled =
     !hasRating;
 
-  submitFeedbackButton
-    .classList
-    .toggle(
-      "ready",
-      hasRating
-    );
+  submitFeedbackButton.classList.toggle(
+    "ready",
+    hasRating
+  );
 }
 
+
+/* =========================================================
+   TEXTAREA
+   ========================================================= */
+
 function autoResizeTextarea() {
-  if (!messageInput) {
+  if (
+    !messageInput
+  ) {
     return;
   }
 

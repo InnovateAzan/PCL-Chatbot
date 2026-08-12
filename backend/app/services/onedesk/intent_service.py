@@ -10,6 +10,7 @@ class OneDeskIntent:
     module: str | None
     request_number: str | None
     status: str | None = None
+    follow_up: bool = False
 
 
 class OneDeskIntentService:
@@ -18,36 +19,65 @@ class OneDeskIntentService:
         re.IGNORECASE,
     )
 
-    def detect(self, message: str) -> OneDeskIntent:
+    def detect(
+        self,
+        message: str,
+        *,
+        context_request_number: str | None = None,
+    ) -> OneDeskIntent:
         normalized = message.lower()
         request_number = self._extract_request_number(message)
+        resolved_request_number = request_number or context_request_number
+        follow_up = (
+            not request_number
+            and bool(context_request_number)
+            and self._looks_like_follow_up(normalized)
+        )
 
-        if self._looks_like_it_ticket_intent(normalized, request_number):
-            if request_number and any(
-                phrase in normalized
-                for phrase in ("assigned to", "assigned", "assignedto")
-            ):
-                return OneDeskIntent("IT_TICKET_ASSIGNEE", "it", request_number)
-            if request_number:
-                if any(
-                    phrase in normalized
-                    for phrase in ("status", "resolved", "closed", "open", "pending", "new", "blocked", "in progress")
-                ):
-                    return OneDeskIntent("IT_TICKET_STATUS", "it", request_number)
-                if not request_number.isdigit():
-                    return OneDeskIntent("IT_TICKET_STATUS", "it", request_number)
-                return OneDeskIntent("IT_TICKET_SERIAL", "it", request_number)
+        if follow_up or self._looks_like_it_ticket_intent(
+            normalized,
+            request_number,
+            context_request_number,
+        ):
+            if request_number or follow_up:
+                serial = resolved_request_number or request_number or context_request_number
+
+                if self._wants_assignee(normalized):
+                    return OneDeskIntent("IT_TICKET_ASSIGNEE", "it", serial, follow_up=follow_up)
+                if self._wants_request_type(normalized):
+                    return OneDeskIntent("IT_TICKET_REQUEST_TYPE", "it", serial, follow_up=follow_up)
+                if self._wants_created_date(normalized):
+                    return OneDeskIntent("IT_TICKET_CREATED", "it", serial, follow_up=follow_up)
+                if self._wants_modified_date(normalized):
+                    return OneDeskIntent("IT_TICKET_MODIFIED", "it", serial, follow_up=follow_up)
+                if self._wants_status(normalized):
+                    return OneDeskIntent("IT_TICKET_STATUS", "it", serial, follow_up=follow_up)
+                if not request_number and follow_up:
+                    return OneDeskIntent("IT_TICKET_DETAILS", "it", serial, follow_up=True)
+                if request_number and not request_number.isdigit():
+                    return OneDeskIntent("IT_TICKET_STATUS", "it", serial, follow_up=follow_up)
+                return OneDeskIntent("IT_TICKET_DETAILS", "it", serial, follow_up=follow_up)
+
             if "latest" in normalized or "akhri" in normalized:
                 return OneDeskIntent("IT_TICKET_LATEST", "it", None)
+            if self._wants_assigned_to_me(normalized):
+                return OneDeskIntent("IT_TICKET_ASSIGNED_TO_ME", "it", None)
+            if self._wants_unassigned(normalized):
+                return OneDeskIntent("IT_TICKET_UNASSIGNED", "it", None)
             if "summary" in normalized or "how many" in normalized or "kitn" in normalized:
                 status_name = self._extract_status(normalized)
                 if status_name:
                     return OneDeskIntent("IT_TICKET_STATUS_COUNT", "it", None, status_name)
                 return OneDeskIntent("IT_TICKET_SUMMARY", "it", None)
-            if "open" in normalized:
+            if self._wants_open(normalized):
                 return OneDeskIntent("IT_TICKET_OPEN", "it", None)
-            if "closed" in normalized:
-                return OneDeskIntent("IT_TICKET_CLOSED", "it", None)
+            if self._wants_resolved(normalized):
+                return OneDeskIntent("IT_TICKET_RESOLVED", "it", None)
+            if any(
+                phrase in normalized
+                for phrase in ("show my tickets", "my tickets", "list my tickets", "all my tickets")
+            ):
+                return OneDeskIntent("IT_TICKET_LIST", "it", None)
             status_name = self._extract_status(normalized)
             if status_name:
                 return OneDeskIntent("IT_TICKET_STATUS_LIST", "it", None, status_name)
@@ -81,12 +111,117 @@ class OneDeskIntentService:
         return value.upper() if value and not value.isdigit() else value
 
     @staticmethod
-    def _looks_like_it_ticket_intent(normalized: str, request_number: str | None) -> bool:
-        if request_number:
+    def _looks_like_it_ticket_intent(
+        normalized: str,
+        request_number: str | None,
+        context_request_number: str | None,
+    ) -> bool:
+        if request_number or context_request_number:
             return any(term in normalized for term in ("ticket", "serial", "status"))
         english_terms = ("ticket", "tickets", "service desk")
         roman_urdu_terms = ("meri ticket", "meri tickets", "dikhao", "ka status")
         return any(term in normalized for term in english_terms + roman_urdu_terms)
+
+    @staticmethod
+    def _looks_like_follow_up(normalized: str) -> bool:
+        return any(
+            phrase in normalized
+            for phrase in (
+                "who is it",
+                "who is this",
+                "show full details",
+                "full details",
+                "details",
+                "what about it",
+                "assign it",
+                "assigned to",
+                "who is assigned",
+                "what is the status",
+                "status kya",
+                "kis ko assigned",
+                "kis ko assign",
+                "kis ko assign hai",
+                "kis ko hai",
+            )
+        )
+
+    @staticmethod
+    def _wants_assignee(normalized: str) -> bool:
+        return any(
+            phrase in normalized
+            for phrase in (
+                "assigned to",
+                "assigned",
+                "assign member",
+                "kis ko assign",
+                "kis ko assigned",
+                "kis ko assign hai",
+            )
+        )
+
+    @staticmethod
+    def _wants_request_type(normalized: str) -> bool:
+        return any(
+            phrase in normalized
+            for phrase in ("request type", "requesttype", "type of request")
+        )
+
+    @staticmethod
+    def _wants_created_date(normalized: str) -> bool:
+        return "created" in normalized or "created at" in normalized
+
+    @staticmethod
+    def _wants_modified_date(normalized: str) -> bool:
+        return any(
+            phrase in normalized
+            for phrase in ("last updated", "updated", "modified")
+        )
+
+    @staticmethod
+    def _wants_status(normalized: str) -> bool:
+        return any(
+            phrase in normalized
+            for phrase in (
+                "status",
+                "resolved",
+                "closed",
+                "open",
+                "pending",
+                "new",
+                "blocked",
+                "in progress",
+            )
+        )
+
+    @staticmethod
+    def _wants_assigned_to_me(normalized: str) -> bool:
+        return any(
+            phrase in normalized
+            for phrase in (
+                "assigned to me",
+                "assign to me",
+                "my assigned tickets",
+                "provide assign tickets only",
+                "which tickets are assigned to me",
+                "mera assigned",
+                "meri assigned",
+                "meri ticket kis ko assign hai",
+            )
+        )
+
+    @staticmethod
+    def _wants_unassigned(normalized: str) -> bool:
+        return "unassigned" in normalized
+
+    @staticmethod
+    def _wants_open(normalized: str) -> bool:
+        return "open tickets" in normalized or (
+            "open" in normalized and "open ticket" not in normalized
+        )
+
+    @staticmethod
+    def _wants_resolved(normalized: str) -> bool:
+        return "resolved" in normalized
 
     @staticmethod
     def _extract_status(normalized: str) -> str | None:
