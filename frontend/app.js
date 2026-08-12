@@ -1,6 +1,7 @@
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8085/api";
 const LOCAL_PROFILE_STORAGE_KEY = "oneassist.localProfile";
 const ACTIVE_SESSION_STORAGE_PREFIX = "oneassist.activeSessionId";
+const ACTIVE_MODULE_STORAGE_PREFIX = "oneassist.activeModule";
 const API_TOKEN_MESSAGE_TYPE = "onedesk-api-token";
 const LEGACY_API_TOKEN_MESSAGE_TYPE = "pcl-gpt:api-token";
 const API_TOKEN_REQUEST_MESSAGE_TYPE = "pcl-gpt:api-token-request";
@@ -88,6 +89,8 @@ let typingIndicatorElement = null;
 let quickActionsElement = null;
 let awaitingSpecificTicketNumber = false;
 let selectedSpecificTicketNumber = "";
+let selectedPolicyName = "";
+let activeModule = readActiveModule() || "main";
 
 const renderedMessageKeys = new Set();
 
@@ -277,6 +280,36 @@ chatForm?.addEventListener(
         message
       );
 
+      return;
+    }
+
+    if (
+      activeModule === "policies" &&
+      isTicketIntent(message)
+    ) {
+      appendMessage("user", message);
+      messageInput.value = "";
+      autoResizeTextarea();
+      appendMessage(
+        "bot",
+        "You're currently in IT Policies. I can help with policy-related questions here. For ticket status, assignment, or Service Desk details, please switch to IT Service Desk Tickets."
+      );
+      showQuickActions("root");
+      return;
+    }
+
+    if (
+      activeModule === "serviceDesk" &&
+      isPolicyIntent(message)
+    ) {
+      appendMessage("user", message);
+      messageInput.value = "";
+      autoResizeTextarea();
+      appendMessage(
+        "bot",
+        "You're currently in IT Service Desk Tickets. For policy-related questions, please switch to IT Policies."
+      );
+      showQuickActions("root");
       return;
     }
 
@@ -1338,6 +1371,8 @@ function showQuickActions(
 
   wrapper.className =
     "quick-actions";
+  wrapper.dataset.kind =
+    kind;
 
   const title =
     document.createElement(
@@ -1350,7 +1385,9 @@ function showQuickActions(
   title.textContent =
     kind === "tickets"
       ? "Choose a ticket action"
-      : "What would you like help with?";
+      : kind === "policies" || kind === "browse-policies" || kind === "policy-actions"
+        ? "What would you like help with?"
+        : `Hi ${getFirstName()}, how can I help you today?`;
 
   const actions =
     kind === "tickets"
@@ -1379,17 +1416,50 @@ function showQuickActions(
             label: "Check Specific Ticket",
             message: "__ask_ticket_number__",
           },
+          {
+            label: "Back to Main Menu",
+            message: "__main_menu__",
+          },
         ]
-      : [
-          {
-            label: "IT Policies",
-            message: "it policies",
-          },
-          {
-            label: "IT Service Desk Tickets",
-            message: "it service desk tickets",
-          },
-        ];
+      : kind === "policies"
+        ? [
+            { label: "Ask a Policy Question", message: "__policy_question__" },
+            { label: "Browse Policies", message: "__browse_policies__" },
+            { label: "Back to Main Menu", message: "__main_menu__" },
+          ]
+        : kind === "browse-policies"
+          ? [
+              { label: "Acceptable Use", message: "__policy_select:Acceptable Use__" },
+              { label: "AI Governance", message: "__policy_select:AI Governance__" },
+              { label: "Information Security", message: "__policy_select:Information Security__" },
+              { label: "Access Control", message: "__policy_select:Access Control__" },
+              { label: "Backup & Disaster Recovery", message: "__policy_select:Backup & Disaster Recovery__" },
+              { label: "Incident Response", message: "__policy_select:Incident Response__" },
+              { label: "Hardware Procurement", message: "__policy_select:Hardware Procurement__" },
+              { label: "Software Procurement", message: "__policy_select:Software Procurement__" },
+              { label: "Vendor & Third-Party Risk", message: "__policy_select:Vendor & Third-Party Risk__" },
+              { label: "Back", message: "__back_policies__" },
+              { label: "Main Menu", message: "__main_menu__" },
+            ]
+          : kind === "policy-actions"
+            ? [
+                { label: "Ask a Question", message: "__policy_question__" },
+                { label: "Policy Summary", message: "policy summary" },
+                { label: "Key Responsibilities", message: "policy key responsibilities" },
+                { label: "Compliance Requirements", message: "policy compliance requirements" },
+                { label: "← Policies", message: "__policy_menu__" },
+                { label: "Main Menu", message: "__main_menu__" },
+              ]
+            : [
+                {
+                  label: "IT Policies",
+                  message: "__policy_menu__",
+                },
+                {
+                  label: "IT Service Desk Tickets",
+                  message: "__ticket_menu__",
+                },
+              ];
 
   const chips =
     document.createElement(
@@ -1459,6 +1529,40 @@ function clearQuickActions() {
     null;
 }
 
+function getFirstName() {
+  const preferred =
+    String(
+      runtimeConfig.userProfile.preferredName || ""
+    ).trim();
+
+  if (preferred) {
+    return preferred.split(/\s+/)[0];
+  }
+
+  const display =
+    String(
+      runtimeConfig.userProfile.displayName || ""
+    ).trim();
+
+  if (display) {
+    return display.split(/\s+/)[0];
+  }
+
+  return "there";
+}
+
+function isPolicyIntent(message) {
+  return /(?:\bpolicy\b|policies|acceptable use|ai governance|information security|access control|backup|disaster recovery|incident response|hardware procurement|software procurement|vendor|third[- ]party risk)/i.test(
+    String(message || "")
+  );
+}
+
+function isTicketIntent(message) {
+  return /(?:\bticket\b|\bassigned\b|\bassign\b|\bopen\b|\bresolved\b|\bstatus\b|\bcreated\b|\bupdated\b|\blast updated\b|\bsummary\b|\bservice desk\b)/i.test(
+    String(message || "")
+  );
+}
+
 function handleQuickAction(
   message
 ) {
@@ -1469,10 +1573,92 @@ function handleQuickAction(
     return;
   }
 
+  /*
+   * Root menu:
+   * IT Policies
+   * Frontend navigation only.
+   * Do NOT send "it policies" to backend.
+   */
+  if (
+    message === "it policies"
+  ) {
+    activeModule = "policies";
+    writeActiveModule(activeModule);
+    showQuickActions(
+      "policies"
+    );
+    return;
+  }
+
+  /*
+   * Root menu:
+   * IT Service Desk Tickets
+   * Frontend navigation only.
+   */
   if (
     message ===
     "it service desk tickets"
   ) {
+    activeModule = "serviceDesk";
+    writeActiveModule(activeModule);
+    showQuickActions(
+      "tickets"
+    );
+    return;
+  }
+
+  /*
+   * Main menu
+   */
+  if (
+    message === "__main_menu__"
+  ) {
+    activeModule = "main";
+    writeActiveModule(activeModule);
+    selectedPolicyName = "";
+
+    awaitingSpecificTicketNumber =
+      false;
+
+    selectedSpecificTicketNumber =
+      "";
+
+    showQuickActions(
+      "root"
+    );
+
+    return;
+  }
+
+  /*
+   * Back to policy menu
+   */
+  if (
+    message === "__policy_menu__"
+  ) {
+    activeModule = "policies";
+    writeActiveModule(activeModule);
+    showQuickActions(
+      "policies"
+    );
+
+    return;
+  }
+
+  /*
+   * Back to ticket menu
+   */
+  if (
+    message === "__ticket_menu__"
+  ) {
+    activeModule = "serviceDesk";
+    writeActiveModule(activeModule);
+    awaitingSpecificTicketNumber =
+      false;
+
+    selectedSpecificTicketNumber =
+      "";
+
     showQuickActions(
       "tickets"
     );
@@ -1480,6 +1666,96 @@ function handleQuickAction(
     return;
   }
 
+  /*
+   * Browse policy list
+   */
+  if (
+    message ===
+    "__browse_policies__"
+  ) {
+    activeModule = "policies";
+    writeActiveModule(activeModule);
+    showQuickActions(
+      "browse-policies"
+    );
+
+    return;
+  }
+
+  /*
+   * User selected a specific policy.
+   *
+   * Example internal value:
+   * __policy_select:AI Governance__
+   */
+  if (
+    message.startsWith(
+      "__policy_select:"
+    )
+  ) {
+    selectedPolicyName =
+      message
+        .slice(
+          "__policy_select:".length
+        )
+        .replace(
+          /__$/,
+          ""
+        )
+        .trim();
+
+    showQuickActions(
+      "policy-actions"
+    );
+
+    return;
+  }
+
+  /*
+   * Ask a policy question.
+   * Do NOT call backend yet.
+   * Wait for user's actual typed question.
+   */
+  if (
+    message ===
+    "__policy_question__"
+  ) {
+    activeModule = "policies";
+    writeActiveModule(activeModule);
+    clearQuickActions();
+
+    appendMessage(
+      "bot",
+      selectedPolicyName
+        ? `Please type your question about ${selectedPolicyName}.`
+        : "Please type your IT policy question below."
+    );
+
+    messageInput.focus();
+
+    return;
+  }
+
+  /*
+   * Back to policy menu
+   */
+  if (
+    message ===
+    "__back_policies__"
+  ) {
+    activeModule = "policies";
+    writeActiveModule(activeModule);
+    showQuickActions(
+      "policies"
+    );
+
+    return;
+  }
+
+  /*
+   * Specific ticket flow.
+   * Ask user for ticket number.
+   */
   if (
     message ===
     "__ask_ticket_number__"
@@ -1502,10 +1778,36 @@ function handleQuickAction(
     return;
   }
 
+  /*
+   * From here onward, this is a REAL action/query
+   * which may be sent to the backend.
+   */
   clearQuickActions();
 
-  messageInput.value =
-    message;
+  /*
+   * Policy actions need the selected policy name.
+   *
+   * Example:
+   * selectedPolicyName = "AI Governance"
+   * message = "policy summary"
+   *
+   * Backend receives:
+   * "AI Governance policy summary"
+   */
+  if (
+    message ===
+      "policy summary" ||
+    message ===
+      "policy key responsibilities" ||
+    message ===
+      "policy compliance requirements"
+  ) {
+    messageInput.value =
+      `${selectedPolicyName || "policy"} ${message}`;
+  } else {
+    messageInput.value =
+      message;
+  }
 
   chatForm.requestSubmit();
 }
@@ -2461,6 +2763,26 @@ function buildNoticeElement(
   sources,
   fallbackNotice
 ) {
+  const buildMainMenuButton = () => {
+    const button =
+      document.createElement("button");
+
+    button.type = "button";
+    button.className = "message-note-action";
+    button.textContent = "← Main Menu";
+
+    button.addEventListener("click", () => {
+      activeModule = "main";
+      writeActiveModule(activeModule);
+      awaitingSpecificTicketNumber = false;
+      selectedSpecificTicketNumber = "";
+      selectedPolicyName = "";
+      showQuickActions("root");
+    });
+
+    return button;
+  };
+
   if (
     Array.isArray(
       sources
@@ -2523,6 +2845,11 @@ function buildNoticeElement(
       wrapper.className =
         "sources";
 
+      const footerRow =
+        document.createElement("div");
+
+      footerRow.className = "message-footer-row";
+
       const title =
         document.createElement(
           "div"
@@ -2569,13 +2896,21 @@ function buildNoticeElement(
         list
       );
 
-      return wrapper;
+      footerRow.appendChild(wrapper);
+      footerRow.appendChild(buildMainMenuButton());
+
+      return footerRow;
     }
   }
 
   if (
     fallbackNotice
   ) {
+    const footerRow =
+      document.createElement("div");
+
+    footerRow.className = "message-footer-row";
+
     const note =
       document.createElement(
         "p"
@@ -2589,7 +2924,10 @@ function buildNoticeElement(
         fallbackNotice
       );
 
-    return note;
+    footerRow.appendChild(note);
+    footerRow.appendChild(buildMainMenuButton());
+
+    return footerRow;
   }
 
   return null;
@@ -3774,6 +4112,43 @@ function clearActiveSessionId() {
   try {
     window.localStorage.removeItem(
       getActiveSessionStorageKey()
+    );
+  } catch {
+    // Local storage can be disabled.
+  }
+}
+
+function getActiveModuleStorageKey() {
+  const profileEmail =
+    (
+      runtimeConfig.userProfile.email ||
+      "anonymous"
+    ).toLowerCase();
+
+  return (
+    `${ACTIVE_MODULE_STORAGE_PREFIX}:` +
+    `${API_BASE_URL}:` +
+    `${profileEmail}`
+  );
+}
+
+function readActiveModule() {
+  try {
+    return String(
+      window.localStorage.getItem(
+        getActiveModuleStorageKey()
+      ) || ""
+    ).trim();
+  } catch {
+    return "";
+  }
+}
+
+function writeActiveModule(moduleName) {
+  try {
+    window.localStorage.setItem(
+      getActiveModuleStorageKey(),
+      String(moduleName || "")
     );
   } catch {
     // Local storage can be disabled.
