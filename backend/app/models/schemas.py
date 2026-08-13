@@ -22,6 +22,7 @@ class ChatRequest(BaseModel):
         max_length=255,
     )
     department: str | None = Field(default=None, max_length=255)
+    active_module: str | None = Field(default=None, alias="activeModule", max_length=32)
 
     model_config = ConfigDict(populate_by_name=True)
 

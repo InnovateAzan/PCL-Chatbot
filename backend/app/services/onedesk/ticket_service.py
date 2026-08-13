@@ -367,6 +367,126 @@ class OneDeskService:
                     intent.request_number,
                 )
                 self._remember_ticket_context(session_key, [ticket] if ticket else [])
+            elif (
+                intent.intent_type == "IT_TICKET_DETAILS_LOOKUP"
+                and intent.request_query
+            ):
+                tickets = await service.find_tickets_by_query(
+                    current_user,
+                    intent.request_query,
+                )
+                if len(tickets) == 1:
+                    ticket = tickets[0]
+                    answer = _format_specific_ticket(
+                        ticket,
+                        str(ticket.get("serial_number") or intent.request_query),
+                    )
+                    self._remember_ticket_context(session_key, [ticket])
+                elif len(tickets) > 1:
+                    answer = "I found multiple matching tickets. Please be more specific."
+                    self._remember_ticket_context(session_key, tickets)
+                else:
+                    answer = "I couldn't find a matching ticket in the tickets available to your account."
+            elif (
+                intent.intent_type == "IT_TICKET_STATUS_LOOKUP"
+                and intent.request_query
+            ):
+                tickets = await service.find_tickets_by_query(
+                    current_user,
+                    intent.request_query,
+                )
+                if len(tickets) == 1:
+                    ticket = tickets[0]
+                    answer = _format_ticket_status(
+                        ticket,
+                        str(ticket.get("serial_number") or intent.request_query),
+                    )
+                    self._remember_ticket_context(session_key, [ticket])
+                elif len(tickets) > 1:
+                    answer = "I found multiple matching tickets. Please be more specific."
+                    self._remember_ticket_context(session_key, tickets)
+                else:
+                    answer = "I couldn't find a matching ticket in the tickets available to your account."
+            elif (
+                intent.intent_type == "IT_TICKET_ASSIGNEE_LOOKUP"
+                and intent.request_query
+            ):
+                tickets = await service.find_tickets_by_query(
+                    current_user,
+                    intent.request_query,
+                )
+                if len(tickets) == 1:
+                    ticket = tickets[0]
+                    answer = _format_ticket_assignee(
+                        ticket,
+                        str(ticket.get("serial_number") or intent.request_query),
+                    )
+                    self._remember_ticket_context(session_key, [ticket])
+                elif len(tickets) > 1:
+                    answer = "I found multiple matching tickets. Please be more specific."
+                    self._remember_ticket_context(session_key, tickets)
+                else:
+                    answer = "I couldn't find a matching ticket in the tickets available to your account."
+            elif (
+                intent.intent_type == "IT_TICKET_REQUEST_TYPE_LOOKUP"
+                and intent.request_query
+            ):
+                tickets = await service.find_tickets_by_query(
+                    current_user,
+                    intent.request_query,
+                )
+                if len(tickets) == 1:
+                    ticket = tickets[0]
+                    answer = _format_ticket_request_type(
+                        ticket,
+                        str(ticket.get("serial_number") or intent.request_query),
+                    )
+                    self._remember_ticket_context(session_key, [ticket])
+                elif len(tickets) > 1:
+                    answer = "I found multiple matching tickets. Please be more specific."
+                    self._remember_ticket_context(session_key, tickets)
+                else:
+                    answer = "I couldn't find a matching ticket in the tickets available to your account."
+            elif (
+                intent.intent_type == "IT_TICKET_CREATED_LOOKUP"
+                and intent.request_query
+            ):
+                tickets = await service.find_tickets_by_query(
+                    current_user,
+                    intent.request_query,
+                )
+                if len(tickets) == 1:
+                    ticket = tickets[0]
+                    answer = _format_ticket_created(
+                        ticket,
+                        str(ticket.get("serial_number") or intent.request_query),
+                    )
+                    self._remember_ticket_context(session_key, [ticket])
+                elif len(tickets) > 1:
+                    answer = "I found multiple matching tickets. Please be more specific."
+                    self._remember_ticket_context(session_key, tickets)
+                else:
+                    answer = "I couldn't find a matching ticket in the tickets available to your account."
+            elif (
+                intent.intent_type == "IT_TICKET_MODIFIED_LOOKUP"
+                and intent.request_query
+            ):
+                tickets = await service.find_tickets_by_query(
+                    current_user,
+                    intent.request_query,
+                )
+                if len(tickets) == 1:
+                    ticket = tickets[0]
+                    answer = _format_ticket_modified(
+                        ticket,
+                        str(ticket.get("serial_number") or intent.request_query),
+                    )
+                    self._remember_ticket_context(session_key, [ticket])
+                elif len(tickets) > 1:
+                    answer = "I found multiple matching tickets. Please be more specific."
+                    self._remember_ticket_context(session_key, tickets)
+                else:
+                    answer = "I couldn't find a matching ticket in the tickets available to your account."
 
             elif (
                 intent.intent_type == "IT_TICKET_STATUS_LIST"

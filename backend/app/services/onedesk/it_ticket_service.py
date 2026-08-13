@@ -261,6 +261,42 @@ class ItTicketService:
 
         return None
 
+    async def find_tickets_by_query(
+        self,
+        current_user: AuthenticatedUser,
+        query: str,
+    ) -> list[dict[str, Any]]:
+        normalized_query = _normalize_search_text(query)
+
+        log_event(
+            logger,
+            "ticket_lookup_started",
+            operation="query",
+            query=normalized_query,
+            user=_safe_user(current_user),
+        )
+
+        tickets = []
+        for ticket in await self._owned_tickets(current_user):
+            haystacks = [
+                _normalize_search_text(str(ticket.serial_number)),
+                _normalize_search_text(ticket.title),
+                _normalize_search_text(ticket.request_type),
+                _normalize_search_text(ticket.nature_of_complaint),
+            ]
+            if any(normalized_query in haystack for haystack in haystacks if haystack):
+                tickets.append(ticket.to_dict())
+
+        log_event(
+            logger,
+            "ticket_lookup_completed",
+            operation="query",
+            query=normalized_query,
+            result_count=len(tickets),
+        )
+
+        return tickets
+
     async def get_ticket_summary(
         self,
         current_user: AuthenticatedUser,
@@ -317,11 +353,20 @@ class ItTicketService:
             user=_safe_user(current_user),
         )
 
-        tickets = [
-            ticket.to_dict()
-            for ticket in await self._owned_tickets(current_user)
-            if _normalize_status(ticket.status) == normalized_status
-        ]
+        owned_tickets = await self._owned_tickets(current_user)
+
+        if normalized_status in {"open", "in progress"}:
+            tickets = [
+                ticket.to_dict()
+                for ticket in owned_tickets
+                if _normalize_status(ticket.status) in OPEN_STATUSES
+            ]
+        else:
+            tickets = [
+                ticket.to_dict()
+                for ticket in owned_tickets
+                if _normalize_status(ticket.status) == normalized_status
+            ]
 
         log_event(
             logger,
@@ -1019,6 +1064,12 @@ def _build_ticket_url(*, site_id: str, list_id: str, item_id: str | None) -> str
         f"{site_root}/_layouts/15/listform.aspx?"
         f"PageType=4&ListId={list_id}&ID={item_id}"
     )
+
+
+def _normalize_search_text(value: str | None) -> str:
+    text = str(value or "").lower()
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
 
 
 def _coerce_serial(

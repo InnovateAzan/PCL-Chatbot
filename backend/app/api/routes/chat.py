@@ -1,5 +1,6 @@
 from functools import lru_cache
 import logging
+import re
 import time
 from datetime import UTC, datetime
 from uuid import UUID, uuid4
@@ -40,6 +41,179 @@ router = APIRouter(tags=["chat"])
 logger = logging.getLogger(__name__)
 
 
+def _normalize_active_module(value: str | None) -> str:
+    normalized = str(value or "").strip().lower()
+    return normalized if normalized in {"main", "policies", "servicedesk"} else "main"
+
+
+def _module_only_response(active_module: str, kind: str) -> ChatResponse:
+    if active_module == "policies":
+        if kind == "ticket":
+            return ChatResponse(
+                answer=(
+                    "You're currently in IT Policies. For ticket status, assignment, "
+                    "or Service Desk details, please switch to IT Service Desk Tickets."
+                ),
+                fallback=True,
+                provider="module-router",
+            )
+        if kind == "mixed":
+            return ChatResponse(
+                answer=(
+                    "I can only help with IT policy-related questions in this section. "
+                    "For the ticket-related part, please switch to IT Service Desk Tickets."
+                ),
+                fallback=True,
+                provider="module-router",
+            )
+        if kind == "vague":
+            return ChatResponse(
+                answer=(
+                    "I couldn't understand your question. Please ask a question related to IT Policies."
+                ),
+                fallback=True,
+                provider="module-router",
+            )
+        return ChatResponse(
+            answer=(
+                "I can only help with IT policy-related questions in this section."
+            ),
+            fallback=True,
+            provider="module-router",
+        )
+
+    if active_module == "servicedesk":
+        if kind == "policy":
+            return ChatResponse(
+                answer=(
+                    "You're currently in IT Service Desk Tickets. For policy-related questions, please switch to IT Policies."
+                ),
+                fallback=True,
+                provider="module-router",
+            )
+        if kind == "mixed":
+            return ChatResponse(
+                answer=(
+                    "I can only help with IT Service Desk ticket-related questions in this section. "
+                    "For the policy-related part, please switch to IT Policies."
+                ),
+                fallback=True,
+                provider="module-router",
+            )
+        if kind == "vague":
+            return ChatResponse(
+                answer=(
+                    "I couldn't understand your request. Please ask about your IT Service Desk tickets."
+                ),
+                fallback=True,
+                provider="module-router",
+            )
+        return ChatResponse(
+            answer=(
+                "I can only help with IT Service Desk ticket-related questions in this section."
+            ),
+            fallback=True,
+            provider="module-router",
+        )
+
+    if kind == "vague":
+        return ChatResponse(
+            answer=(
+                "I couldn't understand your request. Please select IT Policies or IT Service Desk Tickets."
+            ),
+            fallback=True,
+            provider="module-router",
+        )
+
+    return ChatResponse(
+        answer="Please choose IT Policies or IT Service Desk Tickets so I can assist you.",
+        fallback=True,
+        provider="module-router",
+    )
+
+
+def _classify_module_intent(message: str) -> str:
+    normalized = message.lower().strip()
+    policy_terms = (
+        "policy",
+        "policies",
+        "procedure",
+        "standard",
+        "acceptable use",
+        "access control",
+        "information security",
+        "ai governance",
+        "backup",
+        "incident response",
+        "procurement",
+        "vendor",
+    )
+    ticket_terms = (
+        "ticket",
+        "tickets",
+        "service desk",
+        "assigned",
+        "assign",
+        "status",
+        "request type",
+        "created",
+        "updated",
+        "resolved",
+        "open",
+        "summary",
+    )
+    if any(term in normalized for term in policy_terms) and any(term in normalized for term in ticket_terms):
+        return "mixed"
+    if any(term in normalized for term in policy_terms):
+        return "policy"
+    if any(term in normalized for term in ticket_terms):
+        return "ticket"
+    if not normalized or len(re.sub(r"[^a-z0-9]+", "", normalized)) < 3:
+        return "vague"
+    return "vague"
+
+
+def _is_module_restricted_followup(
+    active_module: str,
+    kind: str,
+) -> bool:
+    if active_module == "policies":
+        return kind in {"ticket", "mixed", "vague"}
+    if active_module == "servicedesk":
+        return kind in {"policy", "mixed", "vague"}
+    return kind in {"policy", "ticket", "mixed", "vague"}
+
+
+def _answer_by_active_module(
+    *,
+    payload: ChatRequest,
+    active_module: str,
+    policy_answer: ChatResponse | None = None,
+) -> ChatResponse | None:
+    intent_kind = _classify_module_intent(payload.message)
+    if not _is_module_restricted_followup(active_module, intent_kind):
+        return None
+    if active_module in {"policies", "servicedesk"} and intent_kind == "mixed" and policy_answer:
+        return policy_answer.model_copy(
+            update={
+                "answer": (
+                    f"{policy_answer.answer}\n\n"
+                    "For the ticket-related part, please switch to IT Service Desk Tickets."
+                    if active_module == "policies"
+                    else f"{policy_answer.answer}\n\n"
+                    "For the policy-related part, please switch to IT Policies."
+                )
+            }
+        )
+    return _module_only_response(active_module, intent_kind)
+
+
+def _is_acknowledgement(message: str) -> bool:
+    normalized = re.sub(r"[^a-z\s]", " ", message.lower())
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return normalized in {"ok", "okay", "thanks", "thank you", "alright", "sure", "got it"}
+
+
 @lru_cache
 def get_chatbot() -> PolicyChatbot:
     return PolicyChatbot()
@@ -58,8 +232,25 @@ async def chat(
     existing_db: Session | None = Depends(get_existing_db),
 ) -> ChatResponse:
     settings = get_settings()
+    active_module = _normalize_active_module(
+        getattr(payload, "active_module", None)
+    )
     if not x_oneassist_user_id:
         started = time.perf_counter()
+        if _is_acknowledgement(payload.message):
+            return ChatResponse(
+                answer="Sure! How else can I help?",
+                sources=[],
+                fallback=False,
+                provider="local-ack",
+            )
+        if active_module != "main":
+            module_response = _answer_by_active_module(
+                payload=payload,
+                active_module=active_module,
+            )
+            if module_response:
+                return module_response
         access_token = (
             authorization.split(" ", 1)[1].strip()
             if authorization and authorization.lower().startswith("bearer ")
@@ -121,6 +312,20 @@ async def chat(
 
     if not settings.enable_database:
         started = time.perf_counter()
+        if _is_acknowledgement(payload.message):
+            return ChatResponse(
+                answer="Sure! How else can I help?",
+                sources=[],
+                fallback=False,
+                provider="local-ack",
+            )
+        if active_module != "main":
+            module_response = _answer_by_active_module(
+                payload=payload,
+                active_module=active_module,
+            )
+            if module_response:
+                return module_response
         access_token = (
             authorization.split(" ", 1)[1].strip()
             if authorization and authorization.lower().startswith("bearer ")
@@ -183,6 +388,20 @@ async def chat(
             )
 
         started = time.perf_counter()
+        if _is_acknowledgement(payload.message):
+            return ChatResponse(
+                answer="Sure! How else can I help?",
+                sources=[],
+                fallback=False,
+                provider="local-ack",
+            )
+        if active_module != "main":
+            module_response = _answer_by_active_module(
+                payload=payload,
+                active_module=active_module,
+            )
+            if module_response:
+                return module_response
         log_event(
             logger,
             "chat_request_received",

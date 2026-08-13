@@ -453,6 +453,8 @@ chatForm?.addEventListener(
                   runtimeConfig
                     .userProfile
                     .department,
+
+                activeModule,
               }),
           }
         );
@@ -1770,7 +1772,7 @@ function handleQuickAction(
 
     appendMessage(
       "bot",
-      "Please enter the ticket number."
+      "Please enter the ticket number or describe the ticket you want to check."
     );
 
     messageInput.focus();

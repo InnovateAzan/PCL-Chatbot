@@ -33,6 +33,9 @@ class PolicyChatbot:
     POLICY_UNAVAILABLE_MESSAGE = (
         "Information not available in IT policies."
     )
+    POLICY_DISCLAIMER = (
+        "Note: This is a policy summary. Please refer to the full policy document for complete details."
+    )
     MAX_DISPLAYED_SOURCES = 3
     MAX_CONTEXT_SOURCES = 8
 
@@ -61,6 +64,14 @@ class PolicyChatbot:
                 provider="validation",
             )
 
+        if self._is_acknowledgement(message):
+            return ChatResponse(
+                answer="Sure! How else can I help?",
+                sources=[],
+                fallback=False,
+                provider="local-ack",
+            )
+
         greeting_answer = self._handle_greeting(
             message,
             user_display_name=user_display_name,
@@ -84,6 +95,13 @@ class PolicyChatbot:
             )
             else None
         )
+        if follow_up_context:
+            follow_up_response = self._answer_from_follow_up_context(
+                message=message,
+                active_policy_context=follow_up_context,
+            )
+            if follow_up_response:
+                return self._with_policy_disclaimer(follow_up_response)
         retrieval_query = self._contextualized_query(
             message=message,
             active_policy_context=follow_up_context,
@@ -111,7 +129,10 @@ class PolicyChatbot:
         )
 
         if not sources:
-            response = self._build_general_response(message)
+            response = self._build_general_response(
+                message,
+                follow_up_context=follow_up_context,
+            )
             response.diagnostics = diagnostics | {
                 "gemini_used": response.provider.startswith("gemini"),
                 "fallback_reason": (
@@ -151,7 +172,7 @@ class PolicyChatbot:
                     response_sources,
                     last_question=message,
                 ),
-            )
+            ).model_copy(update={"answer": f"{direct_answer}\n\n{self.POLICY_DISCLAIMER}"})
 
         policy_answer, policy_notice = self._try_gemini_answer(
             message=retrieval_query,
@@ -183,7 +204,7 @@ class PolicyChatbot:
                         response_sources,
                         last_question=message,
                     ),
-                )
+                ).model_copy(update={"answer": f"{fallback_answer}\n\n{self.POLICY_DISCLAIMER}"})
 
             selected_sources = self._select_answer_sources(
                 sources=sources,
@@ -208,7 +229,7 @@ class PolicyChatbot:
                     response_sources,
                     last_question=message,
                 ),
-            )
+            ).model_copy(update={"answer": f"{policy_answer}\n\n{self.POLICY_DISCLAIMER}"})
 
         fallback_answer = self._build_policy_fallback_answer()
         response_sources = self._group_sources_by_document(
@@ -232,7 +253,7 @@ class PolicyChatbot:
                 response_sources,
                 last_question=message,
             ),
-        )
+        ).model_copy(update={"answer": f"{fallback_answer}\n\n{self.POLICY_DISCLAIMER}"})
 
     def health_snapshot(self) -> dict[str, str | bool]:
         return {
@@ -275,8 +296,12 @@ class PolicyChatbot:
     def _build_general_response(
         self,
         message: str,
+        follow_up_context: dict | None = None,
     ) -> ChatResponse:
-        answer, notice = self._try_general_gemini_answer(message)
+        answer, notice = self._try_general_gemini_answer(
+            message,
+            follow_up_context=follow_up_context,
+        )
 
         if answer:
             self._log_final_answer_source("Gemini")
@@ -508,6 +533,7 @@ class PolicyChatbot:
     def _try_general_gemini_answer(
         self,
         message: str,
+        follow_up_context: dict | None = None,
     ) -> tuple[str | None, str | None]:
         if not self.gemini_client:
             log_event(logger, "gemini_generation_skipped", mode="general", reason="not_configured")
@@ -517,7 +543,10 @@ class PolicyChatbot:
                 "for general AI fallback.",
             )
 
-        prompt = self._build_general_prompt(message)
+        prompt = self._build_general_prompt(
+            message,
+            follow_up_context=follow_up_context,
+        )
 
         try:
             started = time.perf_counter()
@@ -626,17 +655,24 @@ class PolicyChatbot:
     def _build_general_prompt(
         self,
         message: str,
+        follow_up_context: dict | None = None,
     ) -> str:
+        context_block = ""
+        if follow_up_context:
+            context_block = (
+                "\nPrevious policy context:\n"
+                f"- Previous question: {follow_up_context.get('last_question') or ''}\n"
+                f"- Document: {follow_up_context.get('title') or follow_up_context.get('document_name') or ''}\n"
+                f"- Keywords: {', '.join(follow_up_context.get('keywords') or [])}\n\n"
+            )
         return (
             "You are Pakistan Cables OneDesk Assistant.\n"
             "The policy knowledge base did not contain a reliable answer.\n"
-            "Answer using accurate general knowledge.\n"
-            "Do not claim that the answer comes from Pakistan Cables policy.\n"
-            "Do not invent Pakistan Cables systems, approvals, contacts, "
-            "responsibilities or procedures.\n"
-            "For Microsoft products such as SharePoint, Teams, Power BI, "
-            "Power Apps or Power Automate, provide a clear general "
-            "explanation.\n\n"
+            "Answer only with a short policy-related clarification or summary.\n"
+            "Do not use general knowledge, Microsoft advice, or unrelated examples.\n"
+            "If the user is clearly following up on the previous policy question, "
+            "continue from that context.\n\n"
+            f"{context_block}"
 
             "Required output format:\n"
             "- Start with one short introductory paragraph.\n"
@@ -720,6 +756,13 @@ class PolicyChatbot:
                 "same policy",
                 "previous answer",
                 "above",
+                "explain more",
+                "explain with example",
+                "what does that mean",
+                "what does this mean",
+                "what do you mean",
+                "give example",
+                "example",
             ]
         ):
             return True
@@ -732,6 +775,72 @@ class PolicyChatbot:
             return intent.confidence < 0.72
 
         return False
+
+    @staticmethod
+    def _is_acknowledgement(message: str) -> bool:
+        normalized = re.sub(r"[^a-z\s]", " ", message.lower())
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+        return normalized in {
+            "ok",
+            "okay",
+            "thanks",
+            "thank you",
+            "alright",
+            "sure",
+            "got it",
+        }
+
+    def _answer_from_follow_up_context(
+        self,
+        *,
+        message: str,
+        active_policy_context: dict,
+    ) -> ChatResponse | None:
+        normalized = re.sub(r"\s+", " ", message.lower()).strip()
+        if not normalized:
+            return None
+
+        if any(
+            phrase in normalized
+            for phrase in (
+                "explain more",
+                "explain with example",
+                "what does that mean",
+                "what does this mean",
+                "what do you mean",
+                "give example",
+                "example",
+            )
+        ):
+            title = str(
+                active_policy_context.get("title")
+                or active_policy_context.get("document_name")
+                or "this policy"
+            ).strip()
+
+            return ChatResponse(
+                answer=(
+                    f"Here is a simpler explanation of {title} based on the previous policy context.\n\n"
+                    f"{self.POLICY_DISCLAIMER}"
+                ),
+                sources=[],
+                fallback=False,
+                provider="policy-followup",
+                active_policy_context=active_policy_context,
+            )
+
+        return None
+
+    def _with_policy_disclaimer(self, response: ChatResponse) -> ChatResponse:
+        if response.provider in {"local-ack", "local-greeting"}:
+            return response
+        if self.POLICY_DISCLAIMER in response.answer:
+            return response
+        return response.model_copy(
+            update={
+                "answer": f"{response.answer}\n\n{self.POLICY_DISCLAIMER}"
+            }
+        )
 
     @staticmethod
     def _contextualized_query(

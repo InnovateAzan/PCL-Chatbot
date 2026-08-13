@@ -9,6 +9,7 @@ class OneDeskIntent:
     intent_type: str
     module: str | None
     request_number: str | None
+    request_query: str | None = None
     status: str | None = None
     follow_up: bool = False
 
@@ -75,12 +76,25 @@ class OneDeskIntentService:
                 return OneDeskIntent("IT_TICKET_RESOLVED", "it", None)
             if any(
                 phrase in normalized
-                for phrase in ("show my tickets", "my tickets", "list my tickets", "all my tickets")
+                for phrase in ("show my tickets", "my tickets", "list my tickets", "all my tickets", "all tickets")
             ):
                 return OneDeskIntent("IT_TICKET_LIST", "it", None)
             status_name = self._extract_status(normalized)
             if status_name:
                 return OneDeskIntent("IT_TICKET_STATUS_LIST", "it", None, status_name)
+            query = self._extract_ticket_query(normalized)
+            if query:
+                if self._wants_assignee(normalized):
+                    return OneDeskIntent("IT_TICKET_ASSIGNEE_LOOKUP", "it", None, request_query=query)
+                if self._wants_request_type(normalized):
+                    return OneDeskIntent("IT_TICKET_REQUEST_TYPE_LOOKUP", "it", None, request_query=query)
+                if self._wants_created_date(normalized):
+                    return OneDeskIntent("IT_TICKET_CREATED_LOOKUP", "it", None, request_query=query)
+                if self._wants_modified_date(normalized):
+                    return OneDeskIntent("IT_TICKET_MODIFIED_LOOKUP", "it", None, request_query=query)
+                if self._wants_status(normalized):
+                    return OneDeskIntent("IT_TICKET_STATUS_LOOKUP", "it", None, request_query=query)
+                return OneDeskIntent("IT_TICKET_DETAILS_LOOKUP", "it", None, request_query=query)
             return OneDeskIntent("IT_TICKET_LIST", "it", None)
 
         if "qc" in normalized or "inspection" in normalized:
@@ -109,6 +123,17 @@ class OneDeskIntentService:
             return None
         value = match.group(1) or match.group(2)
         return value.upper() if value and not value.isdigit() else value
+
+    @staticmethod
+    def _extract_ticket_query(normalized: str) -> str | None:
+        cleaned = re.sub(
+            r"\b(my|the|a|an|ticket|tickets|details|detail|status|assigned|assignment|assigned to|who is|is|of)\b",
+            " ",
+            normalized,
+        )
+        cleaned = re.sub(r"[^a-z0-9]+", " ", cleaned)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned if len(cleaned) >= 2 else None
 
     @staticmethod
     def _looks_like_it_ticket_intent(
@@ -142,6 +167,10 @@ class OneDeskIntentService:
                 "kis ko assign",
                 "kis ko assign hai",
                 "kis ko hai",
+                "only unresolved",
+                "only resolved",
+                "just ticket",
+                "i asked for",
             )
         )
 
@@ -215,21 +244,24 @@ class OneDeskIntentService:
 
     @staticmethod
     def _wants_open(normalized: str) -> bool:
-        return "open tickets" in normalized or (
+        return any(
+            phrase in normalized
+            for phrase in ("open tickets", "unresolved", "pending", "active")
+        ) or (
             "open" in normalized and "open ticket" not in normalized
         )
 
     @staticmethod
     def _wants_resolved(normalized: str) -> bool:
-        return "resolved" in normalized
+        return "resolved" in normalized or "closed" in normalized
 
     @staticmethod
     def _extract_status(normalized: str) -> str | None:
         status_phrases = {
-            "in progress": ("in progress", "in-progress", "progress"),
+            "open": ("open", "unresolved", "pending", "active"),
             "resolved": ("resolved",),
             "closed": ("closed",),
-            "pending": ("pending",),
+            "in progress": ("in progress", "in-progress", "progress"),
             "new": ("new",),
             "blocked": ("blocked",),
             "reopen": ("reopen", "reopened"),
