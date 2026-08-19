@@ -3,6 +3,7 @@ import json
 from typing import Any
 from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -47,10 +48,10 @@ class Settings(BaseSettings):
     # DATABASE
     # --------------------------------------------------
 
-    database_url: str = ""
+    database_url: str = Field(default="", validation_alias="DATABASE_URL")
     db_pool_size: int = 5
     db_max_overflow: int = 10
-    enable_database: bool = True
+    enable_database: bool = Field(default=True, validation_alias="ENABLE_DATABASE")
 
     sqlite_url: str = "sqlite:///./app.db"
 

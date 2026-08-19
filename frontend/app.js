@@ -91,6 +91,7 @@ let awaitingSpecificTicketNumber = false;
 let selectedSpecificTicketNumber = "";
 let selectedPolicyName = "";
 let activeModule = readActiveModule() || "main";
+let greetingShownForFreshRoot = false;
 
 const renderedMessageKeys = new Set();
 
@@ -141,6 +142,7 @@ if (HOSTED_MODE) {
 }
 
 setWidgetOpen(DEFAULT_OPEN);
+syncComposerMode();
 
 updateFeedbackSubmitState();
 
@@ -248,6 +250,24 @@ chatForm?.addEventListener(
       return;
     }
 
+    if (
+      activeModule === "main" &&
+      !awaitingSpecificTicketNumber &&
+      !isGreetingIntent(message) &&
+      !message.startsWith("__")
+    ) {
+      appendMessage("user", message);
+      messageInput.value = "";
+      autoResizeTextarea();
+      appendMessage(
+        "bot",
+        "Please select IT Policies or IT Service Desk Tickets first."
+      );
+      showQuickActions("root");
+      syncComposerMode();
+      return;
+    }
+
     /*
      * Specific ticket number flow.
      *
@@ -280,6 +300,16 @@ chatForm?.addEventListener(
         message
       );
 
+      return;
+    }
+
+    if (isGreetingIntent(message)) {
+      appendMessage("user", message);
+      messageInput.value = "";
+      autoResizeTextarea();
+      showQuickActions("root");
+      greetingShownForFreshRoot = true;
+      syncComposerMode();
       return;
     }
 
@@ -1446,7 +1476,6 @@ function showQuickActions(
           : kind === "policy-actions"
             ? [
                 { label: "Ask a Question", message: "__policy_question__" },
-                { label: "Policy Summary", message: "policy summary" },
                 { label: "Key Responsibilities", message: "policy key responsibilities" },
                 { label: "Compliance Requirements", message: "policy compliance requirements" },
                 { label: "← Policies", message: "__policy_menu__" },
@@ -1565,6 +1594,19 @@ function isTicketIntent(message) {
   );
 }
 
+function isGreetingIntent(message) {
+  const normalized =
+    String(message || "")
+      .toLowerCase()
+      .replace(/[^a-z\s]/g, " ")
+      .replace(/\s+/g, " ")
+      .trim();
+
+  return /^(hi|hello|hey|salam|aoa|assalam o alaikum|assalamualaikum|good morning|good afternoon|good evening)$/.test(
+    normalized
+  );
+}
+
 function handleQuickAction(
   message
 ) {
@@ -1589,6 +1631,7 @@ function handleQuickAction(
     showQuickActions(
       "policies"
     );
+    syncComposerMode();
     return;
   }
 
@@ -1606,6 +1649,7 @@ function handleQuickAction(
     showQuickActions(
       "tickets"
     );
+    syncComposerMode();
     return;
   }
 
@@ -1628,6 +1672,8 @@ function handleQuickAction(
     showQuickActions(
       "root"
     );
+    greetingShownForFreshRoot = false;
+    syncComposerMode();
 
     return;
   }
@@ -1769,6 +1815,10 @@ function handleQuickAction(
 
     selectedSpecificTicketNumber =
       "";
+    if (messageInput) {
+      messageInput.placeholder =
+        "Ask OneDesk Assistant...";
+    }
 
     appendMessage(
       "bot",
@@ -4180,6 +4230,31 @@ function setComposerState(
   }
 }
 
+function syncComposerMode() {
+  if (!messageInput || !sendButton) {
+    return;
+  }
+
+  sendButton.disabled = false;
+
+  if (awaitingSpecificTicketNumber) {
+    messageInput.placeholder =
+      "Ask OneDesk Assistant...";
+    return;
+  }
+
+  if (activeModule === "main") {
+    messageInput.placeholder =
+      "Ask OneDesk Assistant...";
+  } else if (activeModule === "policies") {
+    messageInput.placeholder =
+      "Ask OneDesk Assistant...";
+  } else {
+    messageInput.placeholder =
+      "Ask OneDesk Assistant...";
+  }
+}
+
 function setWidgetOpen(
   isOpen
 ) {
@@ -4211,7 +4286,13 @@ function setWidgetOpen(
     isOpen
   ) {
     messageInput?.focus();
-    showQuickActions("root");
+    if (activeModule === "main" && !greetingShownForFreshRoot) {
+      showQuickActions("root");
+      greetingShownForFreshRoot = true;
+    } else if (activeModule === "main") {
+      showQuickActions("root");
+    }
+    syncComposerMode();
   }
 
   scheduleHostLayoutUpdate();

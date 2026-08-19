@@ -28,6 +28,7 @@ from backend.app.models.schemas import (
     PaginatedChatMessagesResponse,
     PaginatedChatSessionsResponse,
 )
+from backend.app.integrations.onedesk_api_client import OneDeskApiClient, OneDeskApiError
 from backend.app.repositories.existing_postgres import (
     ExistingPostgresRepository,
     persist_chat_best_effort,
@@ -224,6 +225,68 @@ def get_onedesk_service() -> OneDeskService:
     return OneDeskService()
 
 
+@lru_cache
+def get_onedesk_database_client() -> OneDeskApiClient:
+    return OneDeskApiClient()
+
+
+def _onedesk_database_api_enabled() -> bool:
+    settings = get_settings()
+    return bool(settings.enable_onedesk_database_api)
+
+
+async def _save_chat_turn_via_onedesk_api(
+    *,
+    payload: ChatRequest,
+    response: ChatResponse,
+    response_time_ms: int,
+    user_email: str,
+    display_name: str | None,
+    department: str | None,
+    entra_object_id: str | None = None,
+    title: str | None = None,
+) -> ChatResponse:
+    client = get_onedesk_database_client()
+    session_identifier = payload.session_uuid or (str(payload.session_id) if payload.session_id else None)
+    try:
+        user = await client.save_user(
+            email=user_email,
+            entra_object_id=entra_object_id,
+            display_name=display_name,
+            department=department,
+        )
+        persisted = await client.save_chat_turn(
+            user=user,
+            session_uuid=session_identifier,
+            title=title,
+            question=payload.message,
+            answer=response.answer,
+            response_time_ms=response_time_ms,
+            is_answered=not response.fallback,
+        )
+    except OneDeskApiError as exc:
+        log_event(
+            logger,
+            "database_save_failed",
+            level=logging.ERROR,
+            error_code="ONEDESK_DATABASE_API_FAILED",
+            exception_type=type(exc).__name__,
+        )
+        return response
+
+    session = persisted["session"]
+    user_message = persisted["user_message"]
+    assistant_message = persisted["assistant_message"]
+    return response.model_copy(
+        update={
+            "session_id": session.get("id"),
+            "session_uuid": session.get("sessionUuid") or session.get("session_uuid"),
+            "user_message_id": user_message.get("id"),
+            "assistant_message_id": assistant_message.get("id"),
+        }
+    )
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     payload: ChatRequest,
@@ -237,20 +300,7 @@ async def chat(
     )
     if not x_oneassist_user_id:
         started = time.perf_counter()
-        if _is_acknowledgement(payload.message):
-            return ChatResponse(
-                answer="Sure! How else can I help?",
-                sources=[],
-                fallback=False,
-                provider="local-ack",
-            )
-        if active_module != "main":
-            module_response = _answer_by_active_module(
-                payload=payload,
-                active_module=active_module,
-            )
-            if module_response:
-                return module_response
+        response: ChatResponse
         access_token = (
             authorization.split(" ", 1)[1].strip()
             if authorization and authorization.lower().startswith("bearer ")
@@ -272,7 +322,44 @@ async def chat(
         except TypeError:
             ticket_request = onedesk.should_handle(payload.message)
 
-        if ticket_request:
+        module_response = None
+        if _is_acknowledgement(payload.message):
+            response = ChatResponse(
+                answer="Sure! How else can I help?",
+                sources=[],
+                fallback=False,
+                provider="local-ack",
+            )
+        elif active_module != "main":
+            module_response = _answer_by_active_module(
+                payload=payload,
+                active_module=active_module,
+            )
+            if module_response is not None:
+                response = module_response
+            elif ticket_request:
+                log_event(logger, "chat_route_selected", route="ticket")
+                try:
+                    response = await onedesk.answer(
+                        message=payload.message,
+                        user_email="",
+                        access_token=access_token,
+                        session_key=str(payload.session_uuid or payload.session_id or ""),
+                    )
+                except TypeError:
+                    response = await onedesk.answer(
+                        message=payload.message,
+                        user_email="",
+                        access_token=access_token,
+                    )
+            else:
+                log_event(logger, "chat_route_selected", route="policy_rag")
+                response = get_chatbot().answer(
+                    payload.message,
+                    user_display_name=payload.resolved_display_name,
+                    preferred_name=payload.preferred_name,
+                )
+        elif ticket_request:
             log_event(logger, "chat_route_selected", route="ticket")
             try:
                 response = await onedesk.answer(
@@ -295,7 +382,15 @@ async def chat(
                 preferred_name=payload.preferred_name,
             )
         response_time_ms = round((time.perf_counter() - started) * 1000)
-
+        if _onedesk_database_api_enabled():
+            return await _save_chat_turn_via_onedesk_api(
+                payload=payload,
+                response=response,
+                response_time_ms=response_time_ms,
+                user_email=payload.user_email or "guest@oneassist.local",
+                display_name=payload.resolved_display_name,
+                department=payload.department,
+            )
         return _persist_response_to_existing_db(
             enable_database=settings.enable_database,
             db=existing_db,
@@ -312,20 +407,7 @@ async def chat(
 
     if not settings.enable_database:
         started = time.perf_counter()
-        if _is_acknowledgement(payload.message):
-            return ChatResponse(
-                answer="Sure! How else can I help?",
-                sources=[],
-                fallback=False,
-                provider="local-ack",
-            )
-        if active_module != "main":
-            module_response = _answer_by_active_module(
-                payload=payload,
-                active_module=active_module,
-            )
-            if module_response:
-                return module_response
+        response: ChatResponse
         access_token = (
             authorization.split(" ", 1)[1].strip()
             if authorization and authorization.lower().startswith("bearer ")
@@ -340,7 +422,41 @@ async def chat(
         except TypeError:
             ticket_request = onedesk.should_handle(payload.message)
 
-        if ticket_request:
+        if _is_acknowledgement(payload.message):
+            response = ChatResponse(
+                answer="Sure! How else can I help?",
+                sources=[],
+                fallback=False,
+                provider="local-ack",
+            )
+        elif active_module != "main":
+            module_response = _answer_by_active_module(
+                payload=payload,
+                active_module=active_module,
+            )
+            if module_response is not None:
+                response = module_response
+            elif ticket_request:
+                try:
+                    response = await onedesk.answer(
+                        message=payload.message,
+                        user_email=payload.user_email or "",
+                        access_token=access_token,
+                        session_key=str(payload.session_uuid or payload.session_id or ""),
+                    )
+                except TypeError:
+                    response = await onedesk.answer(
+                        message=payload.message,
+                        user_email=payload.user_email or "",
+                        access_token=access_token,
+                    )
+            else:
+                response = get_chatbot().answer(
+                    payload.message,
+                    user_display_name=payload.resolved_display_name,
+                    preferred_name=payload.preferred_name,
+                )
+        elif ticket_request:
             try:
                 response = await onedesk.answer(
                     message=payload.message,
@@ -361,6 +477,15 @@ async def chat(
                 preferred_name=payload.preferred_name,
             )
         response_time_ms = round((time.perf_counter() - started) * 1000)
+        if _onedesk_database_api_enabled():
+            return await _save_chat_turn_via_onedesk_api(
+                payload=payload,
+                response=response,
+                response_time_ms=response_time_ms,
+                user_email=payload.user_email or "guest@oneassist.local",
+                display_name=payload.resolved_display_name,
+                department=payload.department,
+            )
         return _persist_response_to_existing_db(
             enable_database=False,
             db=existing_db,
@@ -385,23 +510,9 @@ async def chat(
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Current user was not found or is inactive.",
-            )
+        )
 
         started = time.perf_counter()
-        if _is_acknowledgement(payload.message):
-            return ChatResponse(
-                answer="Sure! How else can I help?",
-                sources=[],
-                fallback=False,
-                provider="local-ack",
-            )
-        if active_module != "main":
-            module_response = _answer_by_active_module(
-                payload=payload,
-                active_module=active_module,
-            )
-            if module_response:
-                return module_response
         log_event(
             logger,
             "chat_request_received",
@@ -421,9 +532,19 @@ async def chat(
                 if authorization and authorization.lower().startswith("bearer ")
                 else None
             ),
+            active_module=active_module,
         )
         response_time_ms = round((time.perf_counter() - started) * 1000)
-
+        if _onedesk_database_api_enabled():
+            return await _save_chat_turn_via_onedesk_api(
+                payload=payload,
+                response=response,
+                response_time_ms=response_time_ms,
+                user_email=current_user.email,
+                display_name=current_user.display_name,
+                department=current_user.department,
+                entra_object_id=getattr(current_user, "entra_object_id", None),
+            )
         return _persist_response_to_existing_db(
             enable_database=settings.enable_database,
             db=existing_db,
@@ -517,6 +638,36 @@ async def create_chat_session(
     current_user: ChatbotUser = Depends(get_current_user),
     db_session: AsyncSession | None = Depends(get_db_session),
 ) -> CreateChatSessionResponse:
+    if _onedesk_database_api_enabled():
+        client = get_onedesk_database_client()
+        user = await client.save_user(
+            email=current_user.email,
+            entra_object_id=getattr(current_user, "entra_object_id", None),
+            display_name=current_user.display_name,
+            department=current_user.department,
+            job_title=getattr(current_user, "job_title", None),
+        )
+        created = await client.create_chat_session(
+            user_id=int(user.get("id") or current_user.id),
+            title=payload.title if payload else None,
+        )
+        now = datetime.now(UTC)
+        session_id = created.get("id")
+        session_uuid = created.get("sessionUuid") or created.get("session_uuid")
+        return CreateChatSessionResponse(
+            session_id=session_id,
+            session=ChatSessionResponse(
+                id=session_id or uuid4(),
+                user_id=current_user.id,
+                title=payload.title if payload else None,
+                status=str(created.get("status") or "ACTIVE").upper(),
+                started_at=now,
+                ended_at=None,
+                message_count=int(created.get("messageCount") or created.get("message_count") or 0),
+                created_at=now,
+                updated_at=now,
+            ),
+        )
     if not get_settings().enable_database:
         now = datetime.now(UTC)
         session_id = uuid4()
@@ -554,6 +705,19 @@ async def list_chat_sessions(
     limit: int = Query(default=20, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
 ):
+    if _onedesk_database_api_enabled() and user_email:
+        client = get_onedesk_database_client()
+        user = await client.get_user_by_email(user_email)
+        if not user:
+            return {"items": [], "limit": limit, "offset": offset, "total": 0}
+        items = await client.get_user_sessions(int(user.get("id")))
+        window = items[offset:offset + limit]
+        return {
+            "items": [_json_safe(item) for item in window],
+            "limit": limit,
+            "offset": offset,
+            "total": len(items),
+        }
     if user_email and ExistingSessionLocal is not None:
         with ExistingSessionLocal() as db:
             items = ExistingPostgresRepository(db).list_sessions_for_user(
@@ -583,6 +747,29 @@ async def get_chat_session_history(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="user_email is required.",
         )
+    if _onedesk_database_api_enabled():
+        client = get_onedesk_database_client()
+        user = await client.get_user_by_email(user_email)
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat session was not found for this user.",
+            )
+        sessions = await client.get_user_sessions(int(user.get("id")))
+        session = next(
+            (
+                item for item in sessions
+                if str(item.get("sessionUuid") or item.get("session_uuid") or "") == str(session_uuid)
+            ),
+            None,
+        )
+        if session is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Chat session was not found for this user.",
+            )
+        messages = await client.get_session_messages(int(session.get("id")))
+        return _json_safe({"session": session, "messages": messages})
     if ExistingSessionLocal is None:
         return {"session_uuid": session_uuid, "messages": []}
 
@@ -620,6 +807,16 @@ async def list_chat_messages(
     current_user: ChatbotUser = Depends(get_current_user),
     db_session: AsyncSession | None = Depends(get_db_session),
 ) -> PaginatedChatMessagesResponse:
+    if _onedesk_database_api_enabled():
+        client = get_onedesk_database_client()
+        items = await client.get_session_messages(int(session_id))
+        window = items[offset:offset + limit]
+        return PaginatedChatMessagesResponse(
+            items=[ChatMessageResponse.model_validate(item) for item in window],
+            limit=limit,
+            offset=offset,
+            total=len(items),
+        )
     if not get_settings().enable_database:
         return PaginatedChatMessagesResponse(items=[], limit=limit, offset=offset, total=0)
 
@@ -650,6 +847,19 @@ async def end_chat_session(
     db_session: AsyncSession | None = Depends(get_db_session),
     existing_db: Session | None = Depends(get_existing_db),
 ) -> ChatSessionResponse:
+    if _onedesk_database_api_enabled():
+        now = datetime.now(UTC)
+        return ChatSessionResponse(
+            id=session_id,
+            user_id=current_user.id,
+            title=None,
+            status="ENDED",
+            started_at=now,
+            ended_at=now,
+            message_count=0,
+            created_at=now,
+            updated_at=now,
+        )
     if not get_settings().enable_database:
         now = datetime.now(UTC)
         return ChatSessionResponse(

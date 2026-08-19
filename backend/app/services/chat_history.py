@@ -37,6 +37,7 @@ from backend.app.repositories.chat_history import (
     UserRepository,
 )
 from backend.app.services.chatbot import PolicyChatbot
+from backend.app.services.onedesk.intent_service import OneDeskIntentService
 from backend.app.services.onedesk.ticket_service import OneDeskService
 
 
@@ -80,6 +81,7 @@ class ChatHistoryService:
         self.chatbot = chatbot
         self.onedesk = OneDeskService()
         self.settings = get_settings()
+        self.intent_service = OneDeskIntentService()
         self.sessions = ChatSessionRepository(db_session)
         self.messages = ChatMessageRepository(db_session)
         self.sources = MessageSourceRepository(db_session)
@@ -105,6 +107,7 @@ class ChatHistoryService:
         session_id: UUID,
         message: str,
         access_token: str | None = None,
+        active_module: str | None = None,
     ) -> ChatResponse:
         chat_session = await self.sessions.get_owned(
             session_id=session_id,
@@ -141,47 +144,60 @@ class ChatHistoryService:
         session_key = str(chat_session.id)
         context_request_number = self.onedesk.get_ticket_context(session_key)
 
-        if self.onedesk.should_handle(
-            message,
-            context_request_number=context_request_number,
-            session_key=session_key,
-        ):
-            log_event(logger, "chat_route_selected", route="ticket", session_id=str(chat_session.id))
-            response = await self.onedesk.answer(
-                message=message,
-                user_email=user.email,
-                access_token=access_token,
+        response = self._route_module_gate(
+            message=message,
+            active_module=active_module,
+        )
+
+        if response is None:
+            if self.onedesk.should_handle(
+                message,
                 context_request_number=context_request_number,
                 session_key=session_key,
-            )
-            await self.audit.create(
-                user_id=user.id,
-                action="ONEDESK_QUERY",
-                resource_type="chat_session",
-                resource_id=str(session_id),
-                result="SUCCESS",
-                ip_address=None,
-                user_agent=None,
-                metadata_json={"provider": response.provider},
-            )
+            ):
+                log_event(logger, "chat_route_selected", route="ticket", session_id=str(chat_session.id))
+                response = await self.onedesk.answer(
+                    message=message,
+                    user_email=user.email,
+                    access_token=access_token,
+                    context_request_number=context_request_number,
+                    session_key=session_key,
+                )
+                await self.audit.create(
+                    user_id=user.id,
+                    action="ONEDESK_QUERY",
+                    resource_type="chat_session",
+                    resource_id=str(session_id),
+                    result="SUCCESS",
+                    ip_address=None,
+                    user_agent=None,
+                    metadata_json={"provider": response.provider},
+                )
+            else:
+                log_event(logger, "chat_route_selected", route="policy_rag", session_id=str(chat_session.id))
+                active_policy_context = await self.messages.latest_active_policy_context(
+                    session_id=session_id,
+                    user_id=user.id,
+                )
+                log_event(
+                    logger,
+                    "active_policy_context_loaded",
+                    session_id=str(session_id),
+                    context_present=bool(active_policy_context),
+                    document_number=(active_policy_context or {}).get("document_number"),
+                )
+                response = self.chatbot.answer(
+                    message,
+                    user_display_name=user.display_name,
+                    preferred_name=user.preferred_name,
+                    active_policy_context=active_policy_context,
+                )
         else:
-            log_event(logger, "chat_route_selected", route="policy_rag", session_id=str(chat_session.id))
-            active_policy_context = await self.messages.latest_active_policy_context(
-                session_id=session_id,
-                user_id=user.id,
-            )
             log_event(
                 logger,
-                "active_policy_context_loaded",
-                session_id=str(session_id),
-                context_present=bool(active_policy_context),
-                document_number=(active_policy_context or {}).get("document_number"),
-            )
-            response = self.chatbot.answer(
-                message,
-                user_display_name=user.display_name,
-                preferred_name=user.preferred_name,
-                active_policy_context=active_policy_context,
+                "chat_route_selected",
+                route="module_gate",
+                session_id=str(chat_session.id),
             )
         response_time_ms = round((time.perf_counter() - started) * 1000)
         response_source = self._map_response_source(response)
@@ -236,7 +252,19 @@ class ChatHistoryService:
         await self.sessions.increment_message_count(chat_session, by=2)
 
         log_event(logger, "database_commit_started", session_id=str(chat_session.id))
-        await self.db_session.commit()
+        try:
+            await self.db_session.commit()
+        except Exception as exc:
+            await self.db_session.rollback()
+            log_event(
+                logger,
+                "database_commit_failed",
+                level=logging.ERROR,
+                error_code="DATABASE_COMMIT_FAILED",
+                session_id=str(chat_session.id),
+                exception_type=type(exc).__name__,
+            )
+            raise
         log_event(logger, "database_commit_completed", session_id=str(chat_session.id))
 
         return response.model_copy(
@@ -246,6 +274,75 @@ class ChatHistoryService:
                 "response_source": response_source,
             }
         )
+
+    @staticmethod
+    def _route_module_gate(
+        *,
+        message: str,
+        active_module: str | None,
+    ) -> ChatResponse | None:
+        normalized_module = str(active_module or "main").strip().lower()
+        if normalized_module not in {"policies", "servicedesk"}:
+            return None
+
+        intent = OneDeskIntentService().detect(message)
+        if intent.intent_type == "GENERAL_QUESTION" or intent.intent_type == "GREETING":
+            return ChatResponse(
+                answer=(
+                    "I couldn't understand your request. Please select IT Policies or IT Service Desk Tickets."
+                ),
+                sources=[],
+                fallback=True,
+                provider="module-router",
+            )
+
+        if intent.intent_type == "POLICY_QUESTION":
+            return None
+
+        if not intent.module and not intent.request_number and not intent.request_query:
+            return ChatResponse(
+                answer=(
+                    "I couldn't understand your request. Please select IT Policies or IT Service Desk Tickets."
+                ),
+                sources=[],
+                fallback=True,
+                provider="module-router",
+            )
+
+        normalized_message = re.sub(r"[^a-z\s]", " ", message.lower())
+        normalized_message = re.sub(r"\s+", " ", normalized_message).strip()
+        if normalized_message in {"ok", "okay", "thanks", "thank you", "alright", "sure", "got it"}:
+            return ChatResponse(
+                answer="Sure! How else can I help?",
+                sources=[],
+                fallback=False,
+                provider="local-ack",
+            )
+
+        is_ticket = intent.module == "it"
+        is_policy = intent.module == "policy"
+
+        if normalized_module == "policies" and is_ticket:
+            return ChatResponse(
+                answer=(
+                    "You're currently in IT Policies. For ticket status or Service Desk details, please switch to IT Service Desk Tickets."
+                ),
+                sources=[],
+                fallback=True,
+                provider="module-router",
+            )
+
+        if normalized_module == "servicedesk" and is_policy:
+            return ChatResponse(
+                answer=(
+                    "You're currently in IT Service Desk Tickets. For policy-related questions, please switch to IT Policies."
+                ),
+                sources=[],
+                fallback=True,
+                provider="module-router",
+            )
+
+        return None
 
     async def list_sessions(
         self,

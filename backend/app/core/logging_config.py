@@ -203,13 +203,23 @@ def install_exception_handlers(app: FastAPI) -> None:
 def log_startup_configuration() -> None:
     settings = get_settings()
     logger = logging.getLogger("backend.app.startup")
+    database_backend = (
+        "postgresql"
+        if settings.database_url.startswith("postgresql")
+        else "sqlite"
+        if settings.database_url.startswith("sqlite")
+        else "unconfigured"
+    )
     log_event(
         logger,
         "startup_configuration",
         app_env=settings.app_env,
         environment=settings.environment,
         log_level=settings.log_level,
+        enable_database=settings.enable_database,
         database_configured=bool(settings.database_url),
+        database_backend=database_backend,
+        database_url=settings.database_url,
         chroma_path_configured=bool(settings.chroma_path),
         gemini_configured=bool(settings.gemini_api_key),
         entra_tenant_configured=bool(settings.azure_tenant_id),

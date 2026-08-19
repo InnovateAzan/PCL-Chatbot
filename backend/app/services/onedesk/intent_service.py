@@ -20,6 +20,20 @@ class OneDeskIntentService:
         re.IGNORECASE,
     )
 
+    KNOWN_POLICY_NAMES = (
+        "acceptable use",
+        "ai governance",
+        "information security",
+        "access control",
+        "backup disaster recovery",
+        "backup & disaster recovery",
+        "incident response",
+        "hardware procurement",
+        "software procurement",
+        "vendor third party risk",
+        "vendor & third party risk",
+    )
+
     def detect(
         self,
         message: str,
@@ -34,6 +48,28 @@ class OneDeskIntentService:
             and bool(context_request_number)
             and self._looks_like_follow_up(normalized)
         )
+        query = self._extract_ticket_query(normalized)
+
+        policy_intent = self._looks_like_policy_intent(normalized)
+        policy_summary = self._looks_like_policy_summary(normalized)
+        policy_name_hit = self._matches_known_policy_name(normalized)
+        ticket_intent = self._looks_like_it_ticket_intent(
+            normalized,
+            request_number,
+            context_request_number,
+        )
+
+        if policy_name_hit and not ticket_intent:
+            return OneDeskIntent("POLICY_QUESTION", "policy", None)
+
+        if policy_intent and policy_summary:
+            return OneDeskIntent("POLICY_QUESTION", "policy", None)
+
+        if (policy_intent or policy_name_hit) and ticket_intent:
+            return OneDeskIntent("MIXED", None, None, request_query=query)
+
+        if policy_intent:
+            return OneDeskIntent("POLICY_QUESTION", "policy", None)
 
         if follow_up or self._looks_like_it_ticket_intent(
             normalized,
@@ -82,7 +118,6 @@ class OneDeskIntentService:
             status_name = self._extract_status(normalized)
             if status_name:
                 return OneDeskIntent("IT_TICKET_STATUS_LIST", "it", None, status_name)
-            query = self._extract_ticket_query(normalized)
             if query:
                 if self._wants_assignee(normalized):
                     return OneDeskIntent("IT_TICKET_ASSIGNEE_LOOKUP", "it", None, request_query=query)
@@ -96,6 +131,19 @@ class OneDeskIntentService:
                     return OneDeskIntent("IT_TICKET_STATUS_LOOKUP", "it", None, request_query=query)
                 return OneDeskIntent("IT_TICKET_DETAILS_LOOKUP", "it", None, request_query=query)
             return OneDeskIntent("IT_TICKET_LIST", "it", None)
+
+        if query and self._looks_like_ticket_natural_language(normalized):
+            if self._wants_assignee(normalized):
+                return OneDeskIntent("IT_TICKET_ASSIGNEE_LOOKUP", "it", None, request_query=query)
+            if self._wants_request_type(normalized):
+                return OneDeskIntent("IT_TICKET_REQUEST_TYPE_LOOKUP", "it", None, request_query=query)
+            if self._wants_created_date(normalized):
+                return OneDeskIntent("IT_TICKET_CREATED_LOOKUP", "it", None, request_query=query)
+            if self._wants_modified_date(normalized):
+                return OneDeskIntent("IT_TICKET_MODIFIED_LOOKUP", "it", None, request_query=query)
+            if self._wants_status(normalized):
+                return OneDeskIntent("IT_TICKET_STATUS_LOOKUP", "it", None, request_query=query)
+            return OneDeskIntent("IT_TICKET_DETAILS_LOOKUP", "it", None, request_query=query)
 
         if "qc" in normalized or "inspection" in normalized:
             return OneDeskIntent("QC_REQUEST_STATUS", "qc", request_number)
@@ -112,9 +160,6 @@ class OneDeskIntentService:
         if any(word in normalized for word in ("hi", "hello", "salam", "aoa")):
                 return OneDeskIntent("GREETING", None, None)
 
-        if any(word in normalized for word in ("policy", "procedure", "standard")):
-            return OneDeskIntent("POLICY_QUESTION", None, None)
-
         return OneDeskIntent("GENERAL_QUESTION", None, None)
 
     def _extract_request_number(self, message: str) -> str | None:
@@ -127,7 +172,7 @@ class OneDeskIntentService:
     @staticmethod
     def _extract_ticket_query(normalized: str) -> str | None:
         cleaned = re.sub(
-            r"\b(my|the|a|an|ticket|tickets|details|detail|status|assigned|assignment|assigned to|who is|is|of)\b",
+            r"\b(my|the|a|an|ticket|tickets|details|detail|status|assigned|assignment|assigned to|who is|is|of|complain|complaint|request|issue|problem|case|query|record|report|case|case details|what happened|what happened to|show|provide|get|please|kindly)\b",
             " ",
             normalized,
         )
@@ -136,15 +181,76 @@ class OneDeskIntentService:
         return cleaned if len(cleaned) >= 2 else None
 
     @staticmethod
+    def _looks_like_ticket_natural_language(normalized: str) -> bool:
+        cues = (
+            "ticket",
+            "request",
+            "complain",
+            "complaint",
+            "issue",
+            "status",
+            "details",
+            "assigned",
+            "assign",
+            "what happened",
+            "show my",
+            "provide my",
+            "my ",
+        )
+        return any(cue in normalized for cue in cues)
+
+    @staticmethod
+    def _looks_like_policy_intent(normalized: str) -> bool:
+        policy_phrases = (
+            "policy",
+            "policies",
+            "policy summary",
+            "key responsibilities",
+            "compliance requirements",
+            "requirements",
+            "overview",
+            "acceptable use",
+            "ai governance",
+            "information security",
+            "access control",
+            "backup disaster recovery",
+            "backup & disaster recovery",
+            "incident response",
+            "hardware procurement",
+            "software procurement",
+            "vendor third party risk",
+            "vendor & third party risk",
+        )
+        return any(phrase in normalized for phrase in policy_phrases)
+
+    @classmethod
+    def _matches_known_policy_name(cls, normalized: str) -> bool:
+        return any(name in normalized for name in cls.KNOWN_POLICY_NAMES)
+
+    @staticmethod
+    def _looks_like_policy_summary(normalized: str) -> bool:
+        summary_cues = (
+            "policy summary",
+            "summary of",
+            "key responsibilities",
+            "compliance requirements",
+            "requirements",
+            "overview",
+        )
+        return any(cue in normalized for cue in summary_cues)
+
+    @staticmethod
+
+    @staticmethod
     def _looks_like_it_ticket_intent(
         normalized: str,
         request_number: str | None,
         context_request_number: str | None,
     ) -> bool:
         if request_number or context_request_number:
-            return any(term in normalized for term in ("ticket", "serial", "status"))
+            return any(term in normalized for term in ("ticket", "serial"))
         english_terms = ("ticket", "tickets", "service desk")
-        roman_urdu_terms = ("meri ticket", "meri tickets", "dikhao", "ka status")
+        roman_urdu_terms = ("meri ticket", "meri tickets", "dikhao")
         return any(term in normalized for term in english_terms + roman_urdu_terms)
 
     @staticmethod

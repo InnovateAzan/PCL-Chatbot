@@ -106,6 +106,16 @@ app.include_router(health_router, prefix=settings.api_prefix)
 @app.on_event("startup")
 async def validate_live_it_ticket_configuration() -> None:
     log_startup_configuration()
+    if settings.enable_database and not settings.database_url.strip():
+        log_event(
+            logger,
+            "startup_configuration_missing",
+            level=logging.ERROR,
+            missing=["DATABASE_URL"],
+        )
+        raise RuntimeError(
+            "ENABLE_DATABASE is true but DATABASE_URL is not configured."
+        )
     if not settings.enable_onedesk_it_read:
         return
 
